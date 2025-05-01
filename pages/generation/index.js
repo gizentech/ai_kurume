@@ -100,7 +100,7 @@ export default function PatientSearch() {
     <Layout>
       <div className="flex flex-col items-center justify-center min-h-[80vh]">
         <div className="w-full max-w-2xl mx-auto text-center mb-12">
-          <h1 className="text-4xl font-bold text-gray-800 mb-4">AI診療サマリー生成</h1>
+          <h1 className="text-4xl font-bold text-gray-800 mb-4">患者サマリーAI生成</h1>
           <p className="text-xl text-gray-600">患者IDまたは患者名を入力して検索</p>
         </div>
         

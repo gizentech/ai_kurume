@@ -11,8 +11,8 @@ export default async function handler(req, res) {
  try {
    console.log("Attempting to read patient info CSV");
    
-   // パスを確認
-   const patientInfoPath = path.join(process.cwd(), 'public', 'data', 'patient_info_9999.csv');
+   // パスを修正
+   const patientInfoPath = path.join(process.cwd(), 'public', 'data', 'patient_info.csv');
    console.log("CSV path:", patientInfoPath);
    
    // ファイルが存在するか確認

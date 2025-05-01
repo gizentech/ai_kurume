@@ -17,8 +17,8 @@ export default async function handler(req, res) {
     
     console.log(`Attempting to fetch patient records for ID: ${id}`);
     
-    // 患者情報CSVファイルの読み込み
-    const patientInfoPath = path.join(process.cwd(), 'public', 'data', 'patient_info_9999.csv');
+    // 患者情報CSVファイルの読み込み - ファイル名を更新
+    const patientInfoPath = path.join(process.cwd(), 'public', 'data', 'patient_info.csv');
     console.log("Patient info CSV path:", patientInfoPath);
     
     // ファイルが存在するか確認
@@ -67,8 +67,8 @@ export default async function handler(req, res) {
       });
     }
     
-    // 診療記録CSVファイルの読み込み
-    const recordsPath = path.join(process.cwd(), 'public', 'data', 'patient_record_2025_Q1.csv');
+    // 診療記録CSVファイルの読み込み - ファイル名を更新
+    const recordsPath = path.join(process.cwd(), 'public', 'data', 'patient_record.csv');
     console.log("Patient records CSV path:", recordsPath);
     
     // ファイルが存在するか確認
@@ -95,9 +95,9 @@ export default async function handler(req, res) {
     } catch (parseError) {
       console.error("Error parsing CSV with headers, trying without headers:", parseError);
       
-      // ヘッダーがない場合は手動でカラム名を指定
+      // ヘッダーがない場合は手動でカラム名を指定 - 患者ID列を追加
       allRecords = parse(recordsContent, { 
-        columns: ['日付', '診療科', '担当医', '主訴', '現病歴', '診察所見', '診断', '処置・指導・処方'],
+        columns: ['患者ID', '日付', '診療科', '担当医', '主訴', '現病歴', '診察所見', '診断', '処置・指導・処方'],
         skip_empty_lines: true,
         from_line: 1
       });
@@ -105,12 +105,14 @@ export default async function handler(req, res) {
     
     console.log("Patient records parsed records count:", allRecords.length);
     
-    // すべての記録を使用（通常は患者IDでフィルタリングが必要）
-    const patientRecords = allRecords;
+    // 患者IDでフィルタリング - 重要な修正
+    const patientRecords = allRecords.filter(record => record['患者ID'] === id);
+    
+    console.log(`Filtered records for patient ${id}:`, patientRecords.length);
     
     if (patientRecords.length === 0) {
       return res.status(200).json({ 
-        error: '診療記録が見つかりません',
+        error: '該当する診療記録が見つかりません',
         records: '',
         patientName: patientInfo['患者名']
       });
