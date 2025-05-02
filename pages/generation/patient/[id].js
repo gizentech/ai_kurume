@@ -198,6 +198,39 @@ export default function PatientRecord() {
     setGeneratedText('');
     setDisplayedText('');
   };
+  
+  // コピー機能を修正
+  const copyToClipboard = (text) => {
+    // まずクリップボードAPIが利用可能かチェック
+    if (navigator.clipboard && window.isSecureContext) {
+      // セキュアコンテキストでクリップボードAPIが使える場合
+      navigator.clipboard.writeText(text)
+        .then(() => alert('テキストがコピーされました'))
+        .catch(err => alert('コピーに失敗しました: ' + err));
+    } else {
+      // フォールバック手法: テキストエリアを使用
+      try {
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';  // スクロールを防止
+        textArea.style.opacity = '0';       // ユーザーに見えないように
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        
+        const successful = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        
+        if (successful) {
+          alert('テキストがコピーされました');
+        } else {
+          alert('コピーできませんでした');
+        }
+      } catch (err) {
+        alert('コピーに失敗しました: ' + err);
+      }
+    }
+  };
 
   // Count selected records
   const selectedCount = Object.values(selectedRecords).filter(selected => selected).length;
@@ -340,11 +373,7 @@ export default function PatientRecord() {
             <div className="mt-4 flex justify-end space-x-3">
               <button 
                 className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
-                onClick={() => {
-                  navigator.clipboard.writeText(generatedText)
-                    .then(() => alert('テキストがコピーされました'))
-                    .catch(err => alert('コピーに失敗しました: ' + err));
-                }}
+                onClick={() => copyToClipboard(generatedText)}
               >
                 <i className="far fa-copy mr-2"></i>コピー
               </button>

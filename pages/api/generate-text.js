@@ -28,7 +28,7 @@ export default async function handler(req, res) {
   患者ID: ${patientId}
   サマリー作成日: ${formattedDate}
   
-  **診療記録:**
+  診療記録:
   ${prompt}
   
   以下の点に注意して、診療サマリーを作成してください:
