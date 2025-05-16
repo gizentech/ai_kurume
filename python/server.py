@@ -43,24 +43,36 @@ def extract_text_from_json(content):
     if not content:
         return ""
     
-    # 結果のテキスト
-    extracted_text = ""
-    
     try:
-        # "Text"フィールドを正規表現で抽出
-        text_matches = re.findall(r'"Text":"([^"]*)"', content)
+        # 全体の結果テキスト
+        extracted_text = ""
         
-        if text_matches:
-            # すべてのテキスト部分を結合
-            extracted_text = "".join(text_matches)
-        else:
-            # 抽出に失敗した場合は元のコンテンツを返す
-            return content
+        # JSONかどうかを確認
+        if isinstance(content, str) and ('{"Text"' in content or '"Text":' in content):
+            # 正規表現でTextフィールドの値を抽出
+            text_matches = re.findall(r'"Text":"([^"]*)"', content)
+            if text_matches:
+                # すべてのテキスト部分を結合
+                extracted_text = "".join(text_matches)
+                
+        # JSON抽出に失敗した場合は、そのまま返す
+        if not extracted_text and isinstance(content, str):
+            return content.strip()
+            
+        return extracted_text
+        
     except Exception as e:
         logger.error(f"JSONからのテキスト抽出エラー: {e}")
-        return content  # エラーの場合は元のコンテンツを返す
+        # エラーが発生した場合は元のコンテンツを返す
+        if isinstance(content, str):
+            return content.strip()
+        return ""
     
-    return extracted_text.strip()
+    # 空の場合は空文字列を返す
+    if not extracted_text.strip():
+        return ""
+    
+    return extracted_text
 
 def format_soap_content(section_name, content_text):
     """SOAPフォーマットの内容を適切に整形"""
@@ -336,11 +348,6 @@ def get_patient_records(patient_id):
         conn.close()
         
         logger.info(f"{len(records_rows)}件の診療記録を取得しました: 患者ID = {patient_id}")
-        
-        # 最初の記録のサンプルをログに出力
-        if formatted_records:
-            sample_length = min(200, len(formatted_records[0]))
-            logger.info(f"最初の記録サンプル: {formatted_records[0][:sample_length]}...")
         
         # 結果の作成
         return jsonify({

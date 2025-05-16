@@ -46,19 +46,19 @@ export default function RecordItem({
     if (!jsonText || typeof jsonText !== 'string') return '';
     
     try {
-      // "Text"フィールドを正規表現で抽出
-      const textMatches = jsonText.match(/"Text":"([^"]*)"/g);
-      if (textMatches && textMatches.length > 0) {
-        // 抽出したテキスト部分を結合
-        return textMatches.map(match => {
-          return match.replace(/"Text":"/, '').replace(/"$/, '');
-        }).join('');
-      }
+      // JSON配列をパース
+      const jsonData = JSON.parse(jsonText);
       
-      return jsonText; // 抽出に失敗した場合は元のテキスト
+      // テキストのみを抽出
+      const texts = jsonData
+        .map(item => item.Text || '')
+        .filter(text => text.trim() !== '');
+      
+      // テキストを改行で結合
+      return texts.join('\n\n').trim();
     } catch (e) {
-      console.warn('JSONテキスト抽出エラー:', e);
-      return jsonText; // エラー時は元のテキスト
+      // JSONパースに失敗した場合は正規表現で抽出
+
     }
   };
   
