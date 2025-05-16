@@ -41,74 +41,66 @@ export default function RecordItem({
   // SOAPセクションの順序を定義
   const soapOrder = ['Subject', 'Object', 'Assessment', 'Plan'];
   
-  // JSONテキストからテキストフィールドを抽出
-  const extractTextFromJSON = (jsonText) => {
-    if (!jsonText || typeof jsonText !== 'string') {
-      return '';
-    }
-    
-    try {
-      // JSONデータが含まれているか確認
-      if (!jsonText.includes('"Text"')) {
-        return jsonText;
-      }
-      
-      // 抽出したテキストを保存する配列
-      const extractedTexts = [];
-      
-      // JSON形式を分割して処理（複数のJSON配列が混在している可能性がある）
-      const jsonBlocks = jsonText.split('],[');
-      
-      for (let block of jsonBlocks) {
-        // ブロックを正規化
-        let cleanBlock = block.trim();
-        
-        // 前後の余分な文字を削除
-        if (cleanBlock.startsWith('"[{') && cleanBlock.endsWith('}]"')) {
-          cleanBlock = cleanBlock.slice(2, -2);
-        } else if (cleanBlock.startsWith('[{') && cleanBlock.endsWith('}]')) {
-          cleanBlock = cleanBlock.slice(1, -1);
-        }
-        
-        // エスケープされた引用符を処理
-        cleanBlock = cleanBlock.replace(/""/g, '"');
-        
-        // 単一のJSONオブジェクトを処理
-        if (cleanBlock.startsWith('{') && cleanBlock.endsWith('}')) {
-          try {
-            const jsonObj = JSON.parse(cleanBlock);
-            if (jsonObj.Text && jsonObj.Text.trim()) {
-              extractedTexts.push(jsonObj.Text.trim());
-            }
-          } catch (e) {
-            // JSON解析に失敗した場合、正規表現で抽出を試みる
-            const match = cleanBlock.match(/"Text"\s*:\s*"([^"]*)"/);
-            if (match && match[1].trim()) {
-              extractedTexts.push(match[1].trim());
-            }
-          }
-        } else {
-          // 正規表現ですべてのTextフィールドを抽出
-          const matches = cleanBlock.match(/"Text"\s*:\s*"([^"]*)"/g);
-          if (matches) {
-            matches.forEach(match => {
-              const text = match.replace(/"Text"\s*:\s*"/, '').replace(/"$/, '');
-              if (text.trim()) {
-                extractedTexts.push(text.trim());
-              }
-            });
-          }
-        }
-      }
-      
-      // 抽出したテキストを結合
-      return extractedTexts.join(' ');
-    } catch (e) {
-      console.error('JSON処理エラー:', e);
+// JSONテキストからテキスト部分のみを抽出する関数
+const extractTextFromJSON = (jsonText) => {
+  if (!jsonText || typeof jsonText !== 'string') {
+    return '';
+  }
+  
+  try {
+    // JSONデータが含まれているか確認
+    if (!jsonText.includes('"Text"')) {
       return jsonText;
     }
-  };
-  
+    
+    // 抽出したテキストを保存する配列
+    const extractedTexts = [];
+    
+    // 大括弧「[]」で区切られた部分を抽出
+    const jsonBlocks = jsonText.split('],[');
+    
+    for (let block of jsonBlocks) {
+      // ブロックを正規化
+      let cleanBlock = block.trim();
+      
+      // 前後の余分な文字を削除
+      if (cleanBlock.startsWith('"[{') && cleanBlock.endsWith('}]"')) {
+        cleanBlock = cleanBlock.slice(2, -2);
+      } else if (cleanBlock.startsWith('[{') && cleanBlock.endsWith('}]')) {
+        cleanBlock = cleanBlock.slice(1, -1);
+      }
+      
+      // エスケープされた引用符を処理
+      cleanBlock = cleanBlock.replace(/""/g, '"');
+      
+      // 段落内の全テキスト要素を抽出
+      const paragraphText = [];
+      
+      // すべての "Text":"..." パターンを探す
+      const textMatches = cleanBlock.match(/"Text"\s*:\s*"([^"]*)"/g);
+      
+      if (textMatches) {
+        // そのパラグラフ内のすべてのテキスト部分を抽出して結合
+        textMatches.forEach(match => {
+          const text = match.replace(/"Text"\s*:\s*"/, '').replace(/"$/, '');
+          if (text.trim()) {
+            paragraphText.push(text);
+          }
+        });
+        
+        if (paragraphText.length > 0) {
+          extractedTexts.push(paragraphText.join(''));
+        }
+      }
+    }
+    
+    // 抽出したテキストを段落ごとに結合
+    return extractedTexts.join('\n');
+  } catch (e) {
+    console.error('JSON処理エラー:', e);
+    return jsonText; // エラーが発生した場合は元のテキストを返す
+  }
+};
   // テキストコンテンツを処理して表示
   const renderText = (text) => {
     if (!text) return null;
