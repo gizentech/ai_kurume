@@ -44,35 +44,58 @@ def extract_text_from_json(content):
         return ""
     
     try:
-        # 全体の結果テキスト
-        extracted_text = ""
+        # JSONらしい形式かどうか確認
+        if not isinstance(content, str) or not ('"Text"' in content):
+            return content
         
-        # JSONかどうかを確認
-        if isinstance(content, str) and ('{"Text"' in content or '"Text":' in content):
-            # 正規表現でTextフィールドの値を抽出
-            text_matches = re.findall(r'"Text":"([^"]*)"', content)
-            if text_matches:
-                # すべてのテキスト部分を結合
-                extracted_text = "".join(text_matches)
-                
-        # JSON抽出に失敗した場合は、そのまま返す
-        if not extracted_text and isinstance(content, str):
-            return content.strip()
+        # 整形済みのテキストを格納するリスト
+        extracted_texts = []
+        
+        # 行ごとにJSON解析を試みる
+        lines = content.strip().split('],[')
+        if len(lines) == 1:
+            # 単一行の場合
+            lines = [content]
+        
+        for line in lines:
+            # 前処理: JSONとして解析しやすい形に整形
+            clean_line = line.strip()
             
-        return extracted_text
+            # 前後の余分な文字を削除
+            if clean_line.startswith('"[{') and clean_line.endswith('}]"'):
+                clean_line = clean_line[2:-2]  # 二重引用符と外側の括弧を削除
+            elif clean_line.startswith('[{') and clean_line.endswith('}]'):
+                clean_line = clean_line[1:-1]  # 外側の括弧を削除
+            
+            # エスケープされた引用符を修正
+            clean_line = clean_line.replace('""', '"')
+            
+            # 単一のJSONオブジェクトを取得
+            if clean_line.startswith('{') and clean_line.endswith('}'):
+                try:
+                    json_obj = json.loads(clean_line)
+                    if 'Text' in json_obj and json_obj['Text'].strip():
+                        extracted_texts.append(json_obj['Text'].strip())
+                except:
+                    # JSON解析に失敗した場合、正規表現で抽出
+                    match = re.search(r'"Text"\s*:\s*"([^"]*)"', clean_line)
+                    if match and match.group(1).strip():
+                        extracted_texts.append(match.group(1).strip())
+            else:
+                # 正規表現でTextフィールドを抽出
+                matches = re.findall(r'"Text"\s*:\s*"([^"]*)"', clean_line)
+                if matches:
+                    text = ''.join([m for m in matches if m.strip()])
+                    if text:
+                        extracted_texts.append(text)
         
+        # 抽出したテキストを結合
+        result = ' '.join(extracted_texts)
+        
+        return result
     except Exception as e:
         logger.error(f"JSONからのテキスト抽出エラー: {e}")
-        # エラーが発生した場合は元のコンテンツを返す
-        if isinstance(content, str):
-            return content.strip()
-        return ""
-    
-    # 空の場合は空文字列を返す
-    if not extracted_text.strip():
-        return ""
-    
-    return extracted_text
+        return content
 
 def format_soap_content(section_name, content_text):
     """SOAPフォーマットの内容を適切に整形"""
@@ -315,11 +338,18 @@ def get_patient_records(patient_id):
                         if content_row:
                             section, content_text = content_row
                             
+                            # デバッグ: 記載内容を出力
+                            print(f"\n===== DEBUG: CONTENT SECTION: {section} =====")
+                            print(f"===== DEBUG: CONTENT RAW: {content_text[:500]}... =====\n")
+                            
                             # 記載方法に応じたフォーマット処理
                             if record_method == "自由記載":
                                 formatted_content = format_free_content(content_text)
                             else:
                                 formatted_content = format_soap_content(section, content_text)
+                            
+                            # デバッグ: フォーマット後の内容を出力
+                            print(f"\n===== DEBUG: FORMATTED CONTENT: {formatted_content[:500]}... =====\n")
                             
                             # 記載区分と内容を格納
                             content_data[section] = formatted_content
@@ -343,19 +373,29 @@ def get_patient_records(patient_id):
                     record_text += f"{section}：{content}\n"
             
             formatted_records.append(record_text)
-        
+
+        # 最初の数件の記録をデバッグ表示
+        for i, record_text in enumerate(formatted_records[:3]):  # 最初の3件だけ表示
+            print(f"\n===== DEBUG: RECORD {i+1} START =====")
+            print(record_text)
+            print(f"===== DEBUG: RECORD {i+1} END =====\n")
+
         cursor.close()
         conn.close()
         
         logger.info(f"{len(records_rows)}件の診療記録を取得しました: 患者ID = {patient_id}")
         
         # 結果の作成
-        return jsonify({
+        result = {
             "records": "\n\n---\n\n".join(formatted_records),
             "patientName": patient_info.get('patientName', ''),
             "birthDate": patient_info.get('birthDate', ''),
             "gender": patient_info.get('gender', '')
-        })
+        }
+        print(f"\n===== DEBUG: FINAL RECORDS LENGTH: {len(result['records'])} =====\n")
+        print(f"===== DEBUG: SAMPLE OF RECORDS: {result['records'][:500]}... =====\n")
+        
+        return jsonify(result)
     
     except Exception as e:
         logger.error(f"診療記録取得エラー: {e}")

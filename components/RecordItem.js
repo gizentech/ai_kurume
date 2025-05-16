@@ -43,22 +43,69 @@ export default function RecordItem({
   
   // JSONテキストからテキストフィールドを抽出
   const extractTextFromJSON = (jsonText) => {
-    if (!jsonText || typeof jsonText !== 'string') return '';
+    if (!jsonText || typeof jsonText !== 'string') {
+      return '';
+    }
     
     try {
-      // JSON配列をパース
-      const jsonData = JSON.parse(jsonText);
+      // JSONデータが含まれているか確認
+      if (!jsonText.includes('"Text"')) {
+        return jsonText;
+      }
       
-      // テキストのみを抽出
-      const texts = jsonData
-        .map(item => item.Text || '')
-        .filter(text => text.trim() !== '');
+      // 抽出したテキストを保存する配列
+      const extractedTexts = [];
       
-      // テキストを改行で結合
-      return texts.join('\n\n').trim();
+      // JSON形式を分割して処理（複数のJSON配列が混在している可能性がある）
+      const jsonBlocks = jsonText.split('],[');
+      
+      for (let block of jsonBlocks) {
+        // ブロックを正規化
+        let cleanBlock = block.trim();
+        
+        // 前後の余分な文字を削除
+        if (cleanBlock.startsWith('"[{') && cleanBlock.endsWith('}]"')) {
+          cleanBlock = cleanBlock.slice(2, -2);
+        } else if (cleanBlock.startsWith('[{') && cleanBlock.endsWith('}]')) {
+          cleanBlock = cleanBlock.slice(1, -1);
+        }
+        
+        // エスケープされた引用符を処理
+        cleanBlock = cleanBlock.replace(/""/g, '"');
+        
+        // 単一のJSONオブジェクトを処理
+        if (cleanBlock.startsWith('{') && cleanBlock.endsWith('}')) {
+          try {
+            const jsonObj = JSON.parse(cleanBlock);
+            if (jsonObj.Text && jsonObj.Text.trim()) {
+              extractedTexts.push(jsonObj.Text.trim());
+            }
+          } catch (e) {
+            // JSON解析に失敗した場合、正規表現で抽出を試みる
+            const match = cleanBlock.match(/"Text"\s*:\s*"([^"]*)"/);
+            if (match && match[1].trim()) {
+              extractedTexts.push(match[1].trim());
+            }
+          }
+        } else {
+          // 正規表現ですべてのTextフィールドを抽出
+          const matches = cleanBlock.match(/"Text"\s*:\s*"([^"]*)"/g);
+          if (matches) {
+            matches.forEach(match => {
+              const text = match.replace(/"Text"\s*:\s*"/, '').replace(/"$/, '');
+              if (text.trim()) {
+                extractedTexts.push(text.trim());
+              }
+            });
+          }
+        }
+      }
+      
+      // 抽出したテキストを結合
+      return extractedTexts.join(' ');
     } catch (e) {
-      // JSONパースに失敗した場合は正規表現で抽出
-
+      console.error('JSON処理エラー:', e);
+      return jsonText;
     }
   };
   
@@ -66,9 +113,11 @@ export default function RecordItem({
   const renderText = (text) => {
     if (!text) return null;
     
-    // JSONテキストからテキスト部分を抽出
+    // テキスト抽出
     let displayText = text;
-    if (typeof text === 'string' && (text.includes('{"Text"') || text.includes('"Text":'))) {
+    if (typeof text === 'string' && 
+       (text.includes('{"Text"') || text.includes('"Text":') || 
+        text.includes('\\{"Text"') || text.includes('\\"Text\\":'))) {
       displayText = extractTextFromJSON(text);
     }
     
