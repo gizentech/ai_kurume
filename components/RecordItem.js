@@ -27,7 +27,7 @@ export default function RecordItem({
     }
     
     // YYYYMMDDHHMMSS 形式
-    const fullDateMatch = dateStr.match(/^(\d{4})(\d{2})(\d{2})(\d{2})?(\d{2})?/);
+    const fullDateMatch = dateStr.match(/^(\d{4})(\d{2})(\d{2})(\d{2})?(\d{2})?(\d{2})?/);
     if (fullDateMatch) {
       const year = fullDateMatch[1];
       const month = fullDateMatch[2];
@@ -128,14 +128,24 @@ export default function RecordItem({
   
   // 記載区分の表示名を取得
   const getRecordType = () => {
+    // 明示的に記載区分が指定されている場合はそれを使用
     if (record['記載区分']) return record['記載区分'];
+    
+    // 記載方法が指定されている場合はそれを使用
     if (record['記載方法']) return record['記載方法'];
     
-    // SOAPが存在するか確認
+    // SOAPセクションが存在するか確認
     for (const section of soapOrder) {
-      if (record[section]) return 'SOAP';
+      if (record[section]) {
+        return 'SOAP'; // SOAPセクションが存在する場合
+      }
     }
     
+    // その他の特殊な記載区分
+    if (record['自由記載']) return '自由記載';
+    if (record['超音波']) return '超音波検査';
+    
+    // デフォルト
     return '記録';
   };
 
@@ -199,7 +209,7 @@ export default function RecordItem({
       {/* 展開時の内容 */}
       {isExpanded && (
         <div className="p-4">
-          {/* SOAPセクション */}
+          {/* SOAPセクションを順番に表示 */}
           {soapOrder.map(section => {
             if (!record[section]) return null;
             

@@ -1,4 +1,5 @@
 # python/server.py
+
 from flask import Flask, request, jsonify
 import pyodbc
 import logging
@@ -39,75 +40,127 @@ def get_db_connection():
         raise
 
 def extract_text_from_json(content):
-    """JSONフォーマットからテキスト部分だけを抽出して整形"""
+    """JSONフォーマットからテキスト部分だけを抽出して整形 - 改善版"""
     if not content:
         return ""
     
     try:
-        # JSONらしい形式かどうか確認
+        # JSONデータでない場合はそのまま返す
         if not isinstance(content, str) or not ('"Text"' in content):
             return content
         
-        # 整形済みのテキストを格納するリスト
-        extracted_texts = []
+        logger.debug(f"JSONテキスト抽出処理開始: 長さ={len(content)}")
         
-        # 行ごとにJSON解析を試みる
-        lines = content.strip().split('],[')
-        if len(lines) == 1:
-            # 単一行の場合
-            lines = [content]
+        # 正規表現で全てのTextフィールドを一度に抽出する方法
+        all_text_fields = re.findall(r'"Text"\s*:\s*"([^"]*(?:\\"|[^"])*)"', content)
+        if all_text_fields:
+            # エスケープされた引用符を処理
+            processed_texts = []
+            for text in all_text_fields:
+                # エスケープシーケンスを解決
+                processed = text.replace('\\"', '"').replace('\\\\', '\\')
+                processed_texts.append(processed)
+            
+            # すべてのテキストを結合
+            result = ' '.join([t for t in processed_texts if t.strip()])
+            logger.debug(f"正規表現による抽出結果: 長さ={len(result)}")
+            return result
         
-        for line in lines:
-            # 前処理: JSONとして解析しやすい形に整形
-            clean_line = line.strip()
-            
-            # 前後の余分な文字を削除
-            if clean_line.startswith('"[{') and clean_line.endswith('}]"'):
-                clean_line = clean_line[2:-2]  # 二重引用符と外側の括弧を削除
-            elif clean_line.startswith('[{') and clean_line.endswith('}]'):
-                clean_line = clean_line[1:-1]  # 外側の括弧を削除
-            
-            # エスケープされた引用符を修正
-            clean_line = clean_line.replace('""', '"')
-            
-            # 単一のJSONオブジェクトを取得
-            if clean_line.startswith('{') and clean_line.endswith('}'):
+        # 別のアプローチ: JSON文字列を解析してみる
+        try:
+            # JSON配列の場合
+            if content.strip().startswith('[') and content.strip().endswith(']'):
                 try:
-                    json_obj = json.loads(clean_line)
-                    if 'Text' in json_obj and json_obj['Text'].strip():
-                        extracted_texts.append(json_obj['Text'].strip())
+                    # 配列全体をパースしてみる
+                    json_array = json.loads(content)
+                    texts = []
+                    for item in json_array:
+                        if isinstance(item, dict) and 'Text' in item:
+                            texts.append(item['Text'])
+                    
+                    if texts:
+                        result = ' '.join([t for t in texts if t.strip()])
+                        logger.debug(f"JSON配列パースによる抽出結果: 長さ={len(result)}")
+                        return result
                 except:
-                    # JSON解析に失敗した場合、正規表現で抽出
-                    match = re.search(r'"Text"\s*:\s*"([^"]*)"', clean_line)
-                    if match and match.group(1).strip():
-                        extracted_texts.append(match.group(1).strip())
-            else:
-                # 正規表現でTextフィールドを抽出
-                matches = re.findall(r'"Text"\s*:\s*"([^"]*)"', clean_line)
-                if matches:
-                    text = ''.join([m for m in matches if m.strip()])
-                    if text:
-                        extracted_texts.append(text)
+                    pass  # 配列パースに失敗した場合は次の方法を試す
+            
+            # エスケープ処理を修正して解析を試みる
+            modified_content = content.replace('\\"', '"').replace('\\\\', '\\')
+            
+            # 文字列がダブルクォートで始まり終わる場合、それを削除して解析
+            if modified_content.startswith('"') and modified_content.endswith('"'):
+                try:
+                    inner_content = json.loads(modified_content[1:-1])
+                    if isinstance(inner_content, list):
+                        texts = []
+                        for item in inner_content:
+                            if isinstance(item, dict) and 'Text' in item:
+                                texts.append(item['Text'])
+                        
+                        if texts:
+                            result = ' '.join([t for t in texts if t.strip()])
+                            logger.debug(f"修正JSONパースによる抽出結果: 長さ={len(result)}")
+                            return result
+                except:
+                    pass  # この方法も失敗した場合は次へ
+            
+            # もっと強力な方法: 文字列操作で全てのテキストを抽出
+            # すべての "Text": "..." パターンを探して抽出
+            text_blocks = []
+            start_idx = 0
+            
+            while True:
+                # "Text": を探す
+                text_marker = content.find('"Text":', start_idx)
+                if text_marker == -1:
+                    break
+                
+                # テキスト開始の引用符を探す
+                start_quote = content.find('"', text_marker + 7)  # 7 は "Text": の長さ
+                if start_quote == -1:
+                    break
+                
+                # テキスト終了の引用符を探す (エスケープされた引用符をスキップ)
+                end_quote = start_quote + 1
+                while True:
+                    end_quote = content.find('"', end_quote)
+                    if end_quote == -1:
+                        break
+                    
+                    # エスケープされていない引用符を見つけたか確認
+                    if content[end_quote - 1] != '\\':
+                        break
+                    end_quote += 1
+                
+                if end_quote == -1:
+                    break
+                
+                # テキストを抽出して追加
+                text_value = content[start_quote + 1:end_quote]
+                # エスケープを処理
+                text_value = text_value.replace('\\"', '"').replace('\\\\', '\\')
+                text_blocks.append(text_value)
+                
+                # 次の検索開始位置を設定
+                start_idx = end_quote + 1
+            
+            if text_blocks:
+                result = ' '.join([t for t in text_blocks if t.strip()])
+                logger.debug(f"手動文字列操作による抽出結果: 長さ={len(result)}")
+                return result
+            
+        except Exception as e:
+            logger.error(f"JSON構造解析エラー: {e}")
         
-        # 抽出したテキストを結合
-        result = ' '.join(extracted_texts)
+        # 最後の手段: オリジナルの文字列を返す
+        logger.warning("テキスト抽出失敗: オリジナルの内容を返します")
+        return content
         
-        return result
     except Exception as e:
         logger.error(f"JSONからのテキスト抽出エラー: {e}")
+        # エラーが発生しても何かしらの内容を返すべき
         return content
-
-def format_soap_content(section_name, content_text):
-    """SOAPフォーマットの内容を適切に整形"""
-    # JSONからテキストを抽出
-    extracted_text = extract_text_from_json(content_text)
-    return extracted_text
-
-def format_free_content(content_text):
-    """自由記載の内容をフォーマット"""
-    # JSONからテキストを抽出
-    extracted_text = extract_text_from_json(content_text)
-    return extracted_text
 
 # 患者検索エンドポイント
 @app.route('/api/search-patients', methods=['GET'])
@@ -174,7 +227,7 @@ def search_patients():
         logger.error(f"患者検索エラー: {e}")
         return jsonify({"error": str(e), "patients": []})
 
-# 患者記録取得エンドポイント
+# 患者記録取得エンドポイント - SOAPフォーマットに統合した修正版
 @app.route('/api/patient-records/<patient_id>', methods=['GET'])
 def get_patient_records(patient_id):
     try:
@@ -229,27 +282,7 @@ def get_patient_records(patient_id):
         }
         
         # 診療記録の取得 - uidを使用
-        if patient_uid:
-            records_query = """
-                SELECT 
-                    k.uId AS カルテID,
-                    k.記載日時 AS 日付,
-                    k.記載方法,
-                    k.記載者uId AS 担当医,
-                    k.記載内容リスト,
-                    k.診療科uId
-                FROM 
-                    cresc_data.カルテ記載 k
-                WHERE
-                    k.患者uId = ?
-                    AND k.isActive = 1
-                    AND k.isDelete = 0
-                ORDER BY
-                    k.記載日時 DESC
-            """
-            
-            cursor.execute(records_query, (patient_uid,))
-        else:
+        if not patient_uid:
             logger.error("患者UIDが取得できません")
             cursor.close()
             conn.close()
@@ -259,6 +292,26 @@ def get_patient_records(patient_id):
                 "patientName": patient_info.get('patientName', '')
             })
         
+        # カルテ記載の取得
+        records_query = """
+            SELECT 
+                k.uId AS カルテID,
+                k.記載日時 AS 日付,
+                k.記載方法,
+                k.記載者uId AS 担当医ID,
+                k.記載内容リスト,
+                k.診療科uId
+            FROM 
+                cresc_data.カルテ記載 k
+            WHERE
+                k.患者uId = ?
+                AND k.isActive = 1
+                AND k.isDelete = 0
+            ORDER BY
+                k.記載日時 DESC
+        """
+        
+        cursor.execute(records_query, (patient_uid,))
         records_rows = cursor.fetchall()
         
         if not records_rows:
@@ -302,88 +355,100 @@ def get_patient_records(patient_id):
                     logger.error(f"診療科名取得エラー: {e}")
             
             # 担当医の取得
-            担当医 = record.get('担当医', '')
-            if 担当医:
+            担当医 = "不明"
+            担当医ID = record.get('担当医ID')
+            if 担当医ID:
                 try:
-                    cursor.execute("SELECT 漢字氏名 FROM view_cresc_data.ユーザー WHERE uId = ?", (担当医,))
+                    cursor.execute("SELECT 漢字氏名 FROM view_cresc_data.ユーザー WHERE uId = ?", (担当医ID,))
                     医row = cursor.fetchone()
                     if 医row:
                         担当医 = 医row[0]
                 except Exception as e:
                     logger.error(f"担当医名取得エラー: {e}")
             
+            # 記載方法
+            記載方法 = record.get('記載方法', 'SOAP')  # デフォルトをSOAPに設定
+            
             # 記載内容リストの取得
             content_list = record.get('記載内容リスト', '')
-            record_method = record.get('記載方法', '')
-            content_data = {}
+            if not content_list:
+                continue  # 内容がなければスキップ
             
-            if content_list:
-                content_ids = str(content_list).split(',')
-                
-                for content_id in content_ids:
-                    try:
-                        # 記載内容の取得
-                        content_query = """
-                            SELECT 
-                                記載区分, 記載内容
-                            FROM 
-                                cresc_data.カルテ記載内容
-                            WHERE 
-                                uId = ?
-                        """
+            content_ids = str(content_list).split(',')
+            
+            # 1つの診療記録にSOAPの全セクションをまとめる
+            soap_content = {
+                'Subject': '',
+                'Object': '',
+                'Assessment': '',
+                'Plan': ''
+            }
+            
+            # その他のセクション用の辞書
+            other_content = {}
+            
+            # 全ての記載内容を取得
+            for content_id in content_ids:
+                try:
+                    # 記載内容の取得
+                    content_query = """
+                        SELECT 
+                            uId, 記載区分, 記載内容
+                        FROM 
+                            cresc_data.カルテ記載内容
+                        WHERE 
+                            uId = ?
+                    """
+                    
+                    cursor.execute(content_query, (content_id,))
+                    content_row = cursor.fetchone()
+                    
+                    if content_row:
+                        content_uid, section, content_text = content_row
                         
-                        cursor.execute(content_query, (content_id,))
-                        content_row = cursor.fetchone()
+                        # JSONからテキストを抽出
+                        formatted_content = extract_text_from_json(content_text)
                         
-                        if content_row:
-                            section, content_text = content_row
-                            
-                            # デバッグ: 記載内容を出力
-                            print(f"\n===== DEBUG: CONTENT SECTION: {section} =====")
-                            print(f"===== DEBUG: CONTENT RAW: {content_text[:500]}... =====\n")
-                            
-                            # 記載方法に応じたフォーマット処理
-                            if record_method == "自由記載":
-                                formatted_content = format_free_content(content_text)
-                            else:
-                                formatted_content = format_soap_content(section, content_text)
-                            
-                            # デバッグ: フォーマット後の内容を出力
-                            print(f"\n===== DEBUG: FORMATTED CONTENT: {formatted_content[:500]}... =====\n")
-                            
-                            # 記載区分と内容を格納
-                            content_data[section] = formatted_content
-                    except Exception as e:
-                        logger.error(f"記載内容ID {content_id} の取得中にエラー: {e}")
+                        # SOAPセクションに追加
+                        if section in soap_content:
+                            soap_content[section] = formatted_content
+                        else:
+                            # その他のセクション
+                            other_content[section] = formatted_content
+                except Exception as e:
+                    logger.error(f"記載内容ID {content_id} の取得中にエラー: {e}")
+            
+            # 空のSOAPセクションを削除
+            for section in list(soap_content.keys()):
+                if not soap_content[section] or soap_content[section].strip() == "":
+                    del soap_content[section]
+            
+            # SOAPセクションが存在しない場合はスキップ
+            if not soap_content and not other_content:
+                continue
             
             # 記録を整形
             record_text = f"日付：{formatted_date}\n"
             record_text += f"診療科：{診療科}\n"
             record_text += f"担当医：{担当医}\n"
-            record_text += f"記載方法：{record_method}\n"
+            record_text += f"記載方法：{記載方法}\n"
             
-            # SOAPの各セクションを追加
-            for section in ['Subject', 'Object', 'Assessment', 'Plan']:
-                if section in content_data and content_data[section].strip():
-                    record_text += f"{section}：{content_data[section]}\n"
+            # SOAPセクションを追加
+            for section, content in soap_content.items():
+                if content and content.strip():
+                    record_text += f"{section}：{content}\n"
             
             # その他のセクションを追加
-            for section, content in content_data.items():
-                if section not in ['Subject', 'Object', 'Assessment', 'Plan'] and content.strip():
+            for section, content in other_content.items():
+                if content and content.strip():
                     record_text += f"{section}：{content}\n"
             
             formatted_records.append(record_text)
-
-        # 最初の数件の記録をデバッグ表示
-        for i, record_text in enumerate(formatted_records[:3]):  # 最初の3件だけ表示
-            print(f"\n===== DEBUG: RECORD {i+1} START =====")
-            print(record_text)
-            print(f"===== DEBUG: RECORD {i+1} END =====\n")
-
+        
         cursor.close()
         conn.close()
         
-        logger.info(f"{len(records_rows)}件の診療記録を取得しました: 患者ID = {patient_id}")
+        logger.info(f"{len(formatted_records)}件の診療記録を取得しました: 患者ID = {patient_id}")
         
         # 結果の作成
         result = {
@@ -392,8 +457,6 @@ def get_patient_records(patient_id):
             "birthDate": patient_info.get('birthDate', ''),
             "gender": patient_info.get('gender', '')
         }
-        print(f"\n===== DEBUG: FINAL RECORDS LENGTH: {len(result['records'])} =====\n")
-        print(f"===== DEBUG: SAMPLE OF RECORDS: {result['records'][:500]}... =====\n")
         
         return jsonify(result)
     
