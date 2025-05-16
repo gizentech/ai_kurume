@@ -46,6 +46,8 @@ export default function PatientRecordPage() {
 
     try {
       console.log(`患者ID ${id} の記録を取得中...`);
+      
+      // Pythonバックエンドからデータを取得（プロキシ経由）
       const response = await fetch(`/api/proxy/patient-records/${id}`);
       
       if (!response.ok) {
@@ -55,7 +57,8 @@ export default function PatientRecordPage() {
       }
       
       const data = await response.json();
-      console.log('患者記録取得成功:', data ? '記録あり' : '記録なし');
+      console.log('API レスポンス:', data);
+      console.log('記録文字列の長さ:', data.records ? data.records.length : 0);
       
       if (data.error) {
         setError(data.error);
@@ -75,6 +78,7 @@ export default function PatientRecordPage() {
       if (data.records) {
         // 各記録をオブジェクトとして解析
         const parsedRecords = parseRecords(data.records);
+        console.log('解析された記録数:', parsedRecords.length);
         
         // 日付の新しい順（降順）にソート
         parsedRecords.sort((a, b) => {
@@ -84,27 +88,13 @@ export default function PatientRecordPage() {
           return dateB - dateA; // 降順
         });
         
-        // 直近6ヶ月分のみをフィルタリング
-        const sixMonthsAgo = new Date();
-        sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-        const filteredRecords = parsedRecords.filter(record => {
-          const recordDate = convertToComparableDate(record['日付']);
-          return recordDate >= sixMonthsAgo;
-        });
+        setAllRecords(parsedRecords);
+        setRecords(parsedRecords);
         
-        setAllRecords(filteredRecords);
-        setRecords(filteredRecords);
-        
-        // 初期状態ですべての記録を開く
-        const initialExpanded = {};
-        filteredRecords.forEach(record => {
-          initialExpanded[record.recordId] = true; // デフォルトで開く
-        });
-        
-        // 記録を非選択に初期化
+        // 初期状態ですべての記録を選択解除
         const initialSelection = {};
-        filteredRecords.forEach(record => {
-          initialSelection[record.recordId] = false;
+        parsedRecords.forEach(record => {
+          initialSelection[record.recordId || record.id] = false;
         });
         setSelectedRecords(initialSelection);
       }
@@ -121,6 +111,15 @@ export default function PatientRecordPage() {
   const convertToComparableDate = (dateStr) => {
     if (!dateStr) return new Date(0); // 日付がなければ最も古い日付を返す
     
+    // 日付がすでに「YYYY年MM月DD日」形式の場合
+    const japaneseFormatMatch = dateStr.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+    if (japaneseFormatMatch) {
+      const year = parseInt(japaneseFormatMatch[1]);
+      const month = parseInt(japaneseFormatMatch[2]) - 1; // 月は0から始まる
+      const day = parseInt(japaneseFormatMatch[3]);
+      return new Date(year, month, day);
+    }
+    
     // YYYYMMDDHHMMSS 形式
     const fullDateMatch = dateStr.match(/^(\d{4})(\d{2})(\d{2})(\d{2})?(\d{2})?(\d{2})?/);
     if (fullDateMatch) {
@@ -133,8 +132,8 @@ export default function PatientRecordPage() {
       return new Date(year, month, day, hour, minute, second);
     }
     
-    // YYYY/MM/DD または YYYY-MM-DD または YYYY年MM月DD日 形式
-    const normalDateMatch = dateStr.match(/^(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/);
+    // YYYY/MM/DD または YYYY-MM-DD 形式
+    const normalDateMatch = dateStr.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
     if (normalDateMatch) {
       const year = parseInt(normalDateMatch[1]);
       const month = parseInt(normalDateMatch[2]) - 1;
@@ -146,87 +145,100 @@ export default function PatientRecordPage() {
     return new Date(dateStr);
   };
 
-// 記録文字列を構造化オブジェクトに変換
-const parseRecords = (recordsString) => {
-  const records = [];
-  const recordStrings = recordsString.split('\n\n---\n\n');
-  
-  recordStrings.forEach((recordStr, index) => {
-    const record = { id: index, recordId: index };
-    const lines = recordStr.split('\n');
+  // 記録文字列を構造化オブジェクトに変換
+  const parseRecords = (recordsString) => {
+    if (!recordsString || typeof recordsString !== 'string') {
+      return [];
+    }
     
-    let currentSection = '';
-    let sectionContent = '';
+    const records = [];
+    // '---' で区切られた記録をパース
+    const recordStrings = recordsString.split('\n\n---\n\n');
     
-    lines.forEach(line => {
-      // メインセクション（Subject, Objectなど）を検出
-      const sectionMatch = line.match(/^([^：]+)：(.*)$/);
+    recordStrings.forEach((recordStr, index) => {
+      const record = { id: index, recordId: index };
+      const lines = recordStr.split('\n');
       
-      if (sectionMatch) {
-        // 前のセクションがあれば保存
-        if (currentSection && sectionContent) {
-          record[currentSection] = sectionContent.trim();
-        }
+      let currentSection = '';
+      let sectionContent = '';
+      
+      lines.forEach(line => {
+        // 'セクション：内容' の形式を検出
+        const sectionMatch = line.match(/^([^：]+)：(.*)$/);
         
-        currentSection = sectionMatch[1].trim();
-        sectionContent = sectionMatch[2].trim();
-        
-        // JSONデータを処理
-        if (sectionContent.startsWith('[{') && sectionContent.includes('Text')) {
-          try {
-            // JSONパース試行
-            const jsonData = JSON.parse(sectionContent);
-            // テキスト部分を抽出
-            if (Array.isArray(jsonData)) {
-              sectionContent = jsonData.map(item => item.Text || '').join(' ').trim();
-            }
-          } catch (e) {
-            // JSONパースエラー時は元のテキストを使用
-            console.warn('JSONパースエラー:', e);
+        if (sectionMatch) {
+          // 前のセクションがあれば保存
+          if (currentSection && sectionContent) {
+            record[currentSection] = sectionContent.trim();
           }
-        }
-      } else if (currentSection) {
-        // JSONデータ行を処理
-        if (line.startsWith('[{') && line.includes('Text')) {
-          try {
-            const jsonData = JSON.parse(line);
-            if (Array.isArray(jsonData)) {
-              const extractedText = jsonData.map(item => item.Text || '').join(' ').trim();
-              sectionContent += '\n' + extractedText;
-            }
-          } catch (e) {
-            // 解析エラー時は元のテキストを追加
-            sectionContent += '\n' + line;
-          }
-        } else {
-          // 通常のテキスト行を追加
+          
+          currentSection = sectionMatch[1].trim();
+          sectionContent = sectionMatch[2];
+        } else if (currentSection) {
+          // 継続行を追加
           sectionContent += '\n' + line;
         }
+      });
+      
+      // 最後のセクションを保存
+      if (currentSection && sectionContent) {
+        record[currentSection] = sectionContent.trim();
       }
+      
+      // 記載区分の設定
+      if (record['Subject'] || record['Object'] || record['Assessment'] || record['Plan']) {
+        record['記載区分'] = 'SOAP';
+      } else if (record['記載方法']) {
+        record['記載区分'] = record['記載方法'];
+      } else {
+        record['記載区分'] = '記録';
+      }
+      
+      // カテゴリは診療科
+      record.category = record['診療科'] || '不明';
+      
+      // JSONテキストを適切に処理
+      Object.keys(record).forEach(key => {
+        const value = record[key];
+        if (typeof value === 'string' && 
+           (value.includes('{"Text"') || value.includes('"Text":'))) {
+          try {
+            // テキスト抽出を試みる
+            record[key] = extractTextFromJSON(value);
+          } catch (e) {
+            // 抽出に失敗した場合は元の値を保持
+            console.warn(`JSONパース失敗 (${key}):`, e);
+          }
+        }
+      });
+      
+      records.push(record);
     });
     
-    // 最後のセクションを保存
-    if (currentSection && sectionContent) {
-      record[currentSection] = sectionContent.trim();
+    return records;
+  };
+
+  // JSONテキストからTextフィールドを抽出
+  const extractTextFromJSON = (jsonText) => {
+    if (!jsonText) return '';
+    
+    try {
+      // 正規表現でTextフィールドの値を抽出
+      const textMatches = jsonText.match(/"Text":"([^"]*)"/g);
+      if (textMatches) {
+        // 抽出したテキストを整形
+        return textMatches.map(match => {
+          const extracted = match.replace(/"Text":"/, '').slice(0, -1);
+          return extracted;
+        }).join('');
+      }
+      
+      return jsonText; // 抽出に失敗した場合は元のテキスト
+    } catch (e) {
+      console.warn('JSONテキスト抽出エラー:', e);
+      return jsonText; // エラー時は元のテキスト
     }
-    
-    // 記載区分を設定（SOAPまたはFree形式など）
-    if (record['Subject'] || record['Object'] || record['Assessment'] || record['Plan']) {
-      record['記載区分'] = 'SOAP';
-    } else if (record['記載方法']) {
-      record['記載区分'] = record['記載方法'];
-    } else {
-      record['記載区分'] = '記録';
-    }
-    
-    // カテゴリは診療科
-    record.category = record['診療科'] || '不明';
-    
-    records.push(record);
-  });
-  
-  return records;
-};
+  };
 
   // カテゴリ（診療科）リストを取得
   const categories = Array.from(new Set(allRecords.map(record => record.category))).filter(Boolean);

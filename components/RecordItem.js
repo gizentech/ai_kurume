@@ -12,8 +12,13 @@ export default function RecordItem({
   const formatDate = (dateStr) => {
     if (!dateStr) return '不明';
     
-    // YYYY/MM/DD または YYYY-MM-DD または YYYY年MM月DD日 形式
-    const normalDateMatch = dateStr.match(/^(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/);
+    // すでにフォーマット済みの場合（YYYY年MM月DD日 形式）
+    if (dateStr.includes('年') && dateStr.includes('月') && dateStr.includes('日')) {
+      return dateStr;
+    }
+    
+    // YYYY/MM/DD または YYYY-MM-DD 形式
+    const normalDateMatch = dateStr.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
     if (normalDateMatch) {
       const year = normalDateMatch[1];
       const month = normalDateMatch[2];
@@ -33,28 +38,56 @@ export default function RecordItem({
     return dateStr;
   };
 
-  // 1. SOAPセクションの順序を定義
+  // SOAPセクションの順序を定義
   const soapOrder = ['Subject', 'Object', 'Assessment', 'Plan'];
   
-  // 画像に表示されている形式と同じようにする
-  const renderSoapSection = () => {
-    return soapOrder.map(section => {
-      if (!record[section]) return null;
+  // JSONテキストからテキストフィールドを抽出
+  const extractTextFromJSON = (jsonText) => {
+    if (!jsonText || typeof jsonText !== 'string') return '';
+    
+    try {
+      // "Text"フィールドを正規表現で抽出
+      const textMatches = jsonText.match(/"Text":"([^"]*)"/g);
+      if (textMatches && textMatches.length > 0) {
+        // 抽出したテキスト部分を結合
+        return textMatches.map(match => {
+          return match.replace(/"Text":"/, '').replace(/"$/, '');
+        }).join('');
+      }
       
-      return (
-        <div key={section} className="mb-6">
-          <h3 className="text-base font-semibold text-gray-800 mb-2">{section}</h3>
-          <div className="pl-0">
-            {record[section].split('\n').map((line, idx) => (
-              <div key={idx} className="mb-1 text-gray-800">
-                {line}
-              </div>
-            ))}
-          </div>
-          <div className="border-t border-gray-200 mt-4"></div>
-        </div>
-      );
-    });
+      return jsonText; // 抽出に失敗した場合は元のテキスト
+    } catch (e) {
+      console.warn('JSONテキスト抽出エラー:', e);
+      return jsonText; // エラー時は元のテキスト
+    }
+  };
+  
+  // テキストコンテンツを処理して表示
+  const renderText = (text) => {
+    if (!text) return null;
+    
+    // JSONテキストからテキスト部分を抽出
+    let displayText = text;
+    if (typeof text === 'string' && (text.includes('{"Text"') || text.includes('"Text":'))) {
+      displayText = extractTextFromJSON(text);
+    }
+    
+    return (
+      <div className="whitespace-pre-line">{displayText}</div>
+    );
+  };
+  
+  // 記載区分の表示名を取得
+  const getRecordType = () => {
+    if (record['記載区分']) return record['記載区分'];
+    if (record['記載方法']) return record['記載方法'];
+    
+    // SOAPが存在するか確認
+    for (const section of soapOrder) {
+      if (record[section]) return 'SOAP';
+    }
+    
+    return '記録';
   };
 
   return (
@@ -91,7 +124,7 @@ export default function RecordItem({
         <div className="flex items-center">
           {/* 記載区分（ヘッダーとして扱う部分） */}
           <div className="px-3 py-1 bg-blue-50 text-blue-700 text-sm font-medium rounded-full mr-3">
-            {record['記載区分'] || 'SOAP'}
+            {getRecordType()}
           </div>
           
           {/* 展開ボタン */}
@@ -117,7 +150,42 @@ export default function RecordItem({
       {/* 展開時の内容 */}
       {isExpanded && (
         <div className="p-4">
-          {renderSoapSection()}
+          {/* SOAPセクション */}
+          {soapOrder.map(section => {
+            if (!record[section]) return null;
+            
+            return (
+              <div key={section} className="mb-6">
+                <h3 className="text-base font-semibold text-gray-800 mb-2">{section}</h3>
+                <div className="pl-0">
+                  {renderText(record[section])}
+                </div>
+                <div className="border-t border-gray-200 mt-4"></div>
+              </div>
+            );
+          })}
+          
+          {/* その他のセクション情報 */}
+          {Object.keys(record).filter(key => 
+            !soapOrder.includes(key) && 
+            key !== 'id' && 
+            key !== 'recordId' && 
+            key !== 'category' &&
+            key !== '日付' && 
+            key !== '診療科' && 
+            key !== '担当医' && 
+            key !== '記載方法' &&
+            key !== '記載区分' &&
+            record[key] // 値が存在する場合のみ表示
+          ).map(key => (
+            <div key={key} className="mb-6">
+              <h3 className="text-base font-semibold text-gray-800 mb-2">{key}</h3>
+              <div className="pl-0">
+                {renderText(record[key])}
+              </div>
+              <div className="border-t border-gray-200 mt-4"></div>
+            </div>
+          ))}
         </div>
       )}
     </div>

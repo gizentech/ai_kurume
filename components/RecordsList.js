@@ -20,7 +20,7 @@ export default function RecordsList({
     if (records.length > 0) {
       const initialState = {};
       records.forEach(record => {
-        initialState[record.recordId] = defaultExpanded;
+        initialState[record.recordId || record.id] = defaultExpanded;
       });
       setExpandedRecords(initialState);
     }
@@ -46,7 +46,7 @@ export default function RecordsList({
   const toggleAllRecords = (expand) => {
     const newExpandState = {};
     records.forEach(record => {
-      newExpandState[record.recordId] = expand;
+      newExpandState[record.recordId || record.id] = expand;
     });
     setExpandedRecords(newExpandState);
   };
@@ -55,7 +55,7 @@ export default function RecordsList({
   const toggleAllSelection = (select) => {
     const newSelectState = {};
     records.forEach(record => {
-      newSelectState[record.recordId] = select;
+      newSelectState[record.recordId || record.id] = select;
     });
     setSelectedRecords(newSelectState);
   };
@@ -167,12 +167,12 @@ export default function RecordsList({
         <div className="space-y-4">
           {records.map((record) => (
             <RecordItem 
-              key={record.recordId}
+              key={record.recordId || record.id}
               record={record}
-              isExpanded={expandedRecords[record.recordId] || false}
-              isSelected={selectedRecords[record.recordId] || false}
-              onToggleExpand={() => toggleRecordExpand(record.recordId)}
-              onToggleSelect={() => toggleRecordSelection(record.recordId)}
+              isExpanded={expandedRecords[record.recordId || record.id] || false}
+              isSelected={selectedRecords[record.recordId || record.id] || false}
+              onToggleExpand={() => toggleRecordExpand(record.recordId || record.id)}
+              onToggleSelect={() => toggleRecordSelection(record.recordId || record.id)}
             />
           ))}
         </div>

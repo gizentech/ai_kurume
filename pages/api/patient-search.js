@@ -8,7 +8,8 @@ export default async function handler(req, res) {
 
   try {
     console.log("CSVデータから患者情報を取得しています");
-    const patients = await searchPatients();
+    const query = req.query.query || '';
+    const patients = await searchPatients(query);
     
     console.log(`${patients.length}人の患者が見つかりました`);
     

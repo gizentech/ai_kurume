@@ -38,75 +38,40 @@ def get_db_connection():
         logger.error(f"データベース接続エラー: {e}")
         raise
 
-def format_date(date_str):
-    """日付文字列をフォーマットする"""
-    if not date_str:
-        return "不明"
-    try:
-        # yyyymmddhhmmss形式を変換
-        dt = datetime.strptime(str(date_str), "%Y%m%d%H%M%S")
-        return dt.strftime("%Y年%m月%d日 %H:%M")
-    except:
-        return str(date_str)
-
 def extract_text_from_json(content):
     """JSONフォーマットからテキスト部分だけを抽出して整形"""
     if not content:
         return ""
     
-    # 全体の結果テキスト
-    result_text = ""
+    # 結果のテキスト
+    extracted_text = ""
     
-    # 入力をコンマで分割（各JSONオブジェクト文字列）
-    json_blocks = content.split('","')
-    
-    for block in json_blocks:
-        try:
-            # 不要な文字を取り除く
-            cleaned_block = block.replace('[{"', '{"').replace('"}]', '"}')
-            
-            # 文字列をJSONとして解析
-            try:
-                # 正規表現で全てのText値を抽出
-                text_matches = re.findall(r'"Text":"([^"]*)"', block)
-                if text_matches:
-                    line_text = "".join(text_matches)
-                    if line_text.strip():  # 空の行を除外
-                        result_text += line_text + "\n"
-            except Exception as e:
-                logger.error(f"テキスト抽出エラー: {e}")
-                continue
+    try:
+        # "Text"フィールドを正規表現で抽出
+        text_matches = re.findall(r'"Text":"([^"]*)"', content)
         
-        except Exception as e:
-            logger.error(f"JSONブロック解析エラー: {e}")
-            continue
+        if text_matches:
+            # すべてのテキスト部分を結合
+            extracted_text = "".join(text_matches)
+        else:
+            # 抽出に失敗した場合は元のコンテンツを返す
+            return content
+    except Exception as e:
+        logger.error(f"JSONからのテキスト抽出エラー: {e}")
+        return content  # エラーの場合は元のコンテンツを返す
     
-    # 空行の連続を1つにまとめる
-    result_text = re.sub(r'\n{3,}', '\n\n', result_text)
-    
-    return result_text
+    return extracted_text.strip()
 
 def format_soap_content(section_name, content_text):
     """SOAPフォーマットの内容を適切に整形"""
     # JSONからテキストを抽出
     extracted_text = extract_text_from_json(content_text)
-    
-    # 空の場合は空文字列を返す
-    if not extracted_text.strip():
-        return ""
-    
-    # すべてのセクションで同じ処理を行う（シンプルに抽出したテキストを返す）
     return extracted_text
 
 def format_free_content(content_text):
     """自由記載の内容をフォーマット"""
     # JSONからテキストを抽出
     extracted_text = extract_text_from_json(content_text)
-    
-    # 空の場合は空文字列を返す
-    if not extracted_text.strip():
-        return ""
-    
     return extracted_text
 
 # 患者検索エンドポイント
@@ -357,12 +322,12 @@ def get_patient_records(patient_id):
             
             # SOAPの各セクションを追加
             for section in ['Subject', 'Object', 'Assessment', 'Plan']:
-                if section in content_data:
+                if section in content_data and content_data[section].strip():
                     record_text += f"{section}：{content_data[section]}\n"
             
             # その他のセクションを追加
             for section, content in content_data.items():
-                if section not in ['Subject', 'Object', 'Assessment', 'Plan']:
+                if section not in ['Subject', 'Object', 'Assessment', 'Plan'] and content.strip():
                     record_text += f"{section}：{content}\n"
             
             formatted_records.append(record_text)
@@ -371,6 +336,11 @@ def get_patient_records(patient_id):
         conn.close()
         
         logger.info(f"{len(records_rows)}件の診療記録を取得しました: 患者ID = {patient_id}")
+        
+        # 最初の記録のサンプルをログに出力
+        if formatted_records:
+            sample_length = min(200, len(formatted_records[0]))
+            logger.info(f"最初の記録サンプル: {formatted_records[0][:sample_length]}...")
         
         # 結果の作成
         return jsonify({
