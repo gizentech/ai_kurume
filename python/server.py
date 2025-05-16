@@ -50,253 +50,64 @@ def format_date(date_str):
         return str(date_str)
 
 def extract_text_from_json(content):
-    """JSONフォーマットからテキスト部分だけを抽出"""
+    """JSONフォーマットからテキスト部分だけを抽出して整形"""
     if not content:
-        return []
+        return ""
     
-    # テキスト断片を格納するリスト
-    text_fragments = []
+    # 全体の結果テキスト
+    result_text = ""
     
-    for item in content.split('","'):
+    # 入力をコンマで分割（各JSONオブジェクト文字列）
+    json_blocks = content.split('","')
+    
+    for block in json_blocks:
         try:
-            # JSON文字列の修正 - 余分な文字を削除
-            item = item.replace('[{', '{').replace('}]', '}').replace('""', '"')
-            if not item.startswith('{'):
-                item = '{' + item
-            if not item.endswith('}'):
-                item = item + '}'
+            # 不要な文字を取り除く
+            cleaned_block = block.replace('[{"', '{"').replace('"}]', '"}')
             
-            # JSONをパース
-            data = json.loads(item)
-            if "Text" in data:
-                text = data["Text"].strip()
-                if text:  # 空でないテキスト
-                    text_fragments.append(text)
-        except json.JSONDecodeError:
-            # JSONのパースに失敗した場合、元の文字列を使用
-            raw_text = re.search(r'"Text":"([^"]*)"', item)
-            if raw_text:
-                text = raw_text.group(1).strip()
-                if text:
-                    text_fragments.append(text)
-        except Exception:
+            # 文字列をJSONとして解析
+            try:
+                # 正規表現で全てのText値を抽出
+                text_matches = re.findall(r'"Text":"([^"]*)"', block)
+                if text_matches:
+                    line_text = "".join(text_matches)
+                    if line_text.strip():  # 空の行を除外
+                        result_text += line_text + "\n"
+            except Exception as e:
+                logger.error(f"テキスト抽出エラー: {e}")
+                continue
+        
+        except Exception as e:
+            logger.error(f"JSONブロック解析エラー: {e}")
             continue
     
-    return text_fragments
+    # 空行の連続を1つにまとめる
+    result_text = re.sub(r'\n{3,}', '\n\n', result_text)
+    
+    return result_text
 
 def format_soap_content(section_name, content_text):
     """SOAPフォーマットの内容を適切に整形"""
-    # JSONからテキスト断片を抽出
-    fragments = extract_text_from_json(content_text)
+    # JSONからテキストを抽出
+    extracted_text = extract_text_from_json(content_text)
     
-    # セクション固有の処理
-    if section_name == "Subject":
-        return format_subject_section(fragments)
-    elif section_name == "Object":
-        return format_object_section(fragments)
-    elif section_name == "Assessment":
-        return format_assessment_section(fragments)
-    elif section_name == "Plan":
-        return format_plan_section(fragments)
-    else:
-        # その他のセクションはシンプルに結合
-        return "\n".join(fragments)
-
-def format_subject_section(fragments):
-    """Subject セクションのフォーマット"""
-    formatted_text = ""
-    line_buffer = ""
+    # 空の場合は空文字列を返す
+    if not extracted_text.strip():
+        return ""
     
-    # 特定のパターンを検出
-    for fragment in fragments:
-        # G2P1 などの短いフラグメントは結合
-        if re.match(r'^[GP][0-9]$', fragment):
-            line_buffer += fragment
-            continue
-            
-        # 日付行
-        if re.match(r'^(LMP|PMP)', fragment) or re.match(r'^[0-9]+/[0-9]+', fragment):
-            if line_buffer:
-                formatted_text += line_buffer + "\n"
-                line_buffer = ""
-            formatted_text += fragment + "\n"
-            continue
-            
-        # 短い数字や記号だけの場合は次のフラグメントと結合
-        if len(fragment) <= 3 and (fragment.isdigit() or fragment in ["/", "（", "）", "："]):
-            line_buffer += fragment
-            continue
-            
-        # バッファにデータがある場合は追加して改行
-        if line_buffer:
-            formatted_text += line_buffer + fragment + "\n"
-            line_buffer = ""
-        else:
-            formatted_text += fragment + "\n"
-    
-    # 残りのバッファがあれば追加
-    if line_buffer:
-        formatted_text += line_buffer + "\n"
-        
-    return formatted_text
-
-def format_object_section(fragments):
-    """Object セクションのフォーマット"""
-    formatted_text = ""
-    current_line = ""
-    
-    for i, fragment in enumerate(fragments):
-        # 検査日付から始まる行
-        if re.match(r'^[0-9]+/[0-9]+', fragment):
-            if current_line:
-                formatted_text += current_line + "\n"
-            current_line = fragment
-            continue
-            
-        # 検査値や単位は同じ行に結合
-        if len(fragment) <= 10 and (
-            fragment.replace(".", "", 1).isdigit() or
-            "mm" in fragment or "bpm" in fragment or 
-            "：" in fragment or "=" in fragment or
-            "週" in fragment or "日" in fragment or
-            fragment in ["（", "）", "+", "-"]
-        ):
-            current_line += " " + fragment
-            continue
-        
-        # その他の文は改行して表示
-        if current_line:
-            formatted_text += current_line + "\n"
-            current_line = ""
-        
-        formatted_text += fragment + "\n"
-    
-    # 残りの行を追加
-    if current_line:
-        formatted_text += current_line + "\n"
-        
-    return formatted_text
-
-def format_assessment_section(fragments):
-    """Assessment セクションのフォーマット"""
-    formatted_text = ""
-    current_line = ""
-    
-    for fragment in fragments:
-        # 診断名や所見は別々の行
-        if fragment.startswith("#") or "不妊" in fragment or "症" in fragment:
-            if current_line:
-                formatted_text += current_line + "\n"
-            formatted_text += fragment + "\n"
-            current_line = ""
-            continue
-            
-        # 短い文字や数字は結合
-        if len(fragment) <= 5:
-            if "週" in fragment or "日" in fragment or "EDC" in fragment:
-                if current_line:
-                    current_line += " " + fragment
-                else:
-                    current_line = fragment
-            else:
-                current_line += fragment
-            continue
-        
-        # それ以外は新しい行として追加
-        if current_line:
-            formatted_text += current_line + "\n"
-        current_line = fragment
-    
-    # 残りの行を追加
-    if current_line:
-        formatted_text += current_line + "\n"
-        
-    return formatted_text
-
-def format_plan_section(fragments):
-    """Plan セクションのフォーマット"""
-    formatted_text = ""
-    current_line = ""
-    
-    for fragment in fragments:
-        # 日付や時間は同じ行に結合
-        if re.match(r'^[0-9]+/[0-9]+', fragment) or re.match(r'^[0-9]+:[0-9]+', fragment):
-            if current_line:
-                formatted_text += current_line + "\n"
-                current_line = fragment
-            else:
-                current_line = fragment
-            continue
-            
-        # 短い文字や記号は結合
-        if len(fragment) <= 5:
-            current_line += " " + fragment
-            continue
-            
-        # 指示内容など長い文は、前に内容があれば連結、なければ新しい行
-        if current_line:
-            if len(current_line) < 20:  # 短い行なら連結
-                current_line += " " + fragment
-            else:  # 長い行なら改行
-                formatted_text += current_line + "\n"
-                current_line = fragment
-        else:
-            current_line = fragment
-    
-    # 残りの行を追加
-    if current_line:
-        formatted_text += current_line + "\n"
-        
-    return formatted_text
+    # すべてのセクションで同じ処理を行う（シンプルに抽出したテキストを返す）
+    return extracted_text
 
 def format_free_content(content_text):
     """自由記載の内容をフォーマット"""
-    fragments = extract_text_from_json(content_text)
+    # JSONからテキストを抽出
+    extracted_text = extract_text_from_json(content_text)
     
-    # 特定のパターンに基づいて整形
-    formatted_text = ""
-    current_section = ""
-    in_list = False
+    # 空の場合は空文字列を返す
+    if not extracted_text.strip():
+        return ""
     
-    for fragment in fragments:
-        # 空の行
-        if not fragment.strip():
-            formatted_text += "\n"
-            continue
-            
-        # セクション見出し
-        if fragment.startswith("【") and fragment.endswith("】"):
-            if current_section:
-                formatted_text += "\n"
-            current_section = fragment
-            formatted_text += f"\n{fragment.strip('【】')}\n"
-            formatted_text += "".ljust(40, "─") + "\n"
-            in_list = False
-            continue
-            
-        # 項目と値のペア
-        if "：" in fragment and len(fragment) < 30:
-            formatted_text += f"{fragment}\n"
-            in_list = False
-            continue
-            
-        # 日付形式の行
-        if re.match(r'^[0-9]+/[0-9]+', fragment):
-            formatted_text += f"{fragment}\n"
-            in_list = False
-            continue
-            
-        # 箇条書きのような短い項目
-        if len(fragment) < 50 and not in_list:
-            formatted_text += f"{fragment}\n"
-            in_list = True
-            continue
-            
-        # 長い文章
-        formatted_text += f"{fragment}\n"
-        in_list = False
-    
-    return formatted_text
+    return extracted_text
 
 # 患者検索エンドポイント
 @app.route('/api/search-patients', methods=['GET'])
@@ -466,7 +277,6 @@ def get_patient_records(patient_id):
         
         for record_row in records_rows:
             record = dict(zip(records_columns, record_row))
-            logger.info(f"記録: {record}")
             
             # 日付の整形
             record_date = record.get('日付', '')
@@ -548,12 +358,12 @@ def get_patient_records(patient_id):
             # SOAPの各セクションを追加
             for section in ['Subject', 'Object', 'Assessment', 'Plan']:
                 if section in content_data:
-                    record_text += f"{section}：\n{content_data[section]}\n"
+                    record_text += f"{section}：{content_data[section]}\n"
             
             # その他のセクションを追加
             for section, content in content_data.items():
                 if section not in ['Subject', 'Object', 'Assessment', 'Plan']:
-                    record_text += f"{section}：\n{content}\n"
+                    record_text += f"{section}：{content}\n"
             
             formatted_records.append(record_text)
         
