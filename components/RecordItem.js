@@ -41,66 +41,46 @@ export default function RecordItem({
   // SOAPセクションの順序を定義
   const soapOrder = ['Subject', 'Object', 'Assessment', 'Plan'];
   
-// JSONテキストからテキスト部分のみを抽出する関数
-const extractTextFromJSON = (jsonText) => {
-  if (!jsonText || typeof jsonText !== 'string') {
-    return '';
-  }
-  
-  try {
-    // JSONデータが含まれているか確認
-    if (!jsonText.includes('"Text"')) {
+  // JSONテキストからテキスト部分のみを抽出する関数
+  const extractTextFromJSON = (jsonText) => {
+    if (!jsonText || typeof jsonText !== 'string') {
+      return '';
+    }
+    
+    try {
+      // JSONテキストでない場合はそのまま返す
+      if (!jsonText.includes('"Text"') && !jsonText.includes('\\"Text\\"')) {
+        return jsonText;
+      }
+      
+      // エスケープされたクォートを処理
+      let cleanedText = jsonText
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\')
+        .replace(/""/g, '"');
+      
+      // 最もシンプルなアプローチ: すべての "Text":"..." パターンをマッチ
+      const allMatches = [];
+      const regex = /"Text"\s*:\s*"([^"]*)"/g;
+      let match;
+      
+      while ((match = regex.exec(cleanedText)) !== null) {
+        allMatches.push(match[1]);
+      }
+      
+      if (allMatches.length > 0) {
+        // ここが重要: 空のテキストは改行に置き換え、それ以外は内容をそのまま使用
+        return allMatches.map(text => text.trim() === '' ? '\n' : text).join('');
+      }
+      
+      // 何も見つからなかった場合は元のテキストを返す
       return jsonText;
+    } catch (e) {
+      console.error('JSON処理エラー:', e);
+      return jsonText; // エラーが発生した場合は元のテキストを返す
     }
-    
-    // 抽出したテキストを保存する配列
-    const extractedTexts = [];
-    
-    // 大括弧「[]」で区切られた部分を抽出
-    const jsonBlocks = jsonText.split('],[');
-    
-    for (let block of jsonBlocks) {
-      // ブロックを正規化
-      let cleanBlock = block.trim();
-      
-      // 前後の余分な文字を削除
-      if (cleanBlock.startsWith('"[{') && cleanBlock.endsWith('}]"')) {
-        cleanBlock = cleanBlock.slice(2, -2);
-      } else if (cleanBlock.startsWith('[{') && cleanBlock.endsWith('}]')) {
-        cleanBlock = cleanBlock.slice(1, -1);
-      }
-      
-      // エスケープされた引用符を処理
-      cleanBlock = cleanBlock.replace(/""/g, '"');
-      
-      // 段落内の全テキスト要素を抽出
-      const paragraphText = [];
-      
-      // すべての "Text":"..." パターンを探す
-      const textMatches = cleanBlock.match(/"Text"\s*:\s*"([^"]*)"/g);
-      
-      if (textMatches) {
-        // そのパラグラフ内のすべてのテキスト部分を抽出して結合
-        textMatches.forEach(match => {
-          const text = match.replace(/"Text"\s*:\s*"/, '').replace(/"$/, '');
-          if (text.trim()) {
-            paragraphText.push(text);
-          }
-        });
-        
-        if (paragraphText.length > 0) {
-          extractedTexts.push(paragraphText.join(''));
-        }
-      }
-    }
-    
-    // 抽出したテキストを段落ごとに結合
-    return extractedTexts.join('\n');
-  } catch (e) {
-    console.error('JSON処理エラー:', e);
-    return jsonText; // エラーが発生した場合は元のテキストを返す
-  }
-};
+  };
+  
   // テキストコンテンツを処理して表示
   const renderText = (text) => {
     if (!text) return null;
@@ -108,8 +88,7 @@ const extractTextFromJSON = (jsonText) => {
     // テキスト抽出
     let displayText = text;
     if (typeof text === 'string' && 
-       (text.includes('{"Text"') || text.includes('"Text":') || 
-        text.includes('\\{"Text"') || text.includes('\\"Text\\":'))) {
+       (text.includes('"Text"') || text.includes('\\"Text\\"'))) {
       displayText = extractTextFromJSON(text);
     }
     

@@ -10,6 +10,7 @@ export default function PatientSearch() {
   const [filteredPatients, setFilteredPatients] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [history, setHistory] = useState([]);
+  const [error, setError] = useState('');
   
   const suggestionsRef = useRef(null);
   const router = useRouter();
@@ -37,13 +38,18 @@ export default function PatientSearch() {
     };
   }, [suggestionsRef]);
   
-  // Filter patients based on patient ID input
+  // Filter patients based on patient ID input - 修正済み
   useEffect(() => {
     if (patientId) {
-      const filtered = patients.filter(patient => 
-        patient['患者ID'].includes(patientId) || 
-        patient['患者名'].includes(patientId)
-      );
+      const filtered = patients.filter(patient => {
+        // 患者IDは完全一致のみ
+        if (patient['患者ID'] === patientId) return true;
+        
+        // 患者名は部分一致
+        if (patient['患者名'].includes(patientId)) return true;
+        
+        return false;
+      });
       setFilteredPatients(filtered);
     } else {
       setFilteredPatients([]);
@@ -52,23 +58,26 @@ export default function PatientSearch() {
   
   // Load patient list for autocomplete
   const fetchPatients = async () => {
+    setError('');
     try {
       console.log("Fetching patients list...");
       const response = await fetch('/api/patient-search');
       console.log("Response status:", response.status);
       
-      if (!response.ok) {
-        // エラーレスポンスの内容を確認
-        const errorText = await response.text();
-        console.error("Error response text:", errorText);
-        throw new Error(`Failed to fetch patients: ${response.status} ${response.statusText}`);
-      }
-      
       const data = await response.json();
-      console.log("Patients data received:", data);
-      setPatients(data.patients || []);
+      
+      if (response.ok) {
+        console.log("Patients data received:", data);
+        setPatients(data.patients || []);
+      } else {
+        // エラーメッセージを設定
+        setError(data.error || 'データの取得に失敗しました');
+        setPatients([]);
+      }
     } catch (error) {
       console.error('Error fetching patients:', error);
+      setError('患者データの取得に失敗しました: ' + error.message);
+      setPatients([]);
     }
   };
 
@@ -104,6 +113,16 @@ export default function PatientSearch() {
           <p className="text-xl text-gray-600">患者IDまたは患者名を入力して検索</p>
         </div>
         
+        {/* エラーメッセージ表示 */}
+        {error && (
+          <div className="w-full max-w-2xl mx-auto mb-4">
+            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
+              <strong className="font-bold">エラー: </strong>
+              <span className="block sm:inline">{error}</span>
+            </div>
+          </div>
+        )}
+        
         <div className="w-full max-w-2xl mx-auto relative">
           <div className="relative">
             <input 
@@ -112,7 +131,12 @@ export default function PatientSearch() {
               placeholder="患者IDまたは患者名を入力..."
               value={patientId}
               onChange={(e) => {
-                setPatientId(e.target.value);
+                // 全角数字を半角に変換
+                const value = e.target.value;
+                const convertedValue = value.replace(/[０-９]/g, function(s) {
+                  return String.fromCharCode(s.charCodeAt(0) - 0xFEE0);
+                });
+                setPatientId(convertedValue);
                 setShowSuggestions(true);
               }}
               onFocus={() => setShowSuggestions(true)}

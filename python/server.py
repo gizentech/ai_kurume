@@ -176,7 +176,7 @@ def search_patients():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # 検索クエリの作成
+        # 検索クエリの作成 - isActive=1, isDelete=0 を追加
         sql_query = """
             SELECT 
                 ゲスト番号, 漢字氏名, 生年月日, 性別
@@ -184,6 +184,8 @@ def search_patients():
                 view_cresc_data.ゲスト基本情報
             WHERE 
                 (ゲスト番号 LIKE ? OR 漢字氏名 LIKE ?)
+                AND isActive = 1 
+                AND isDelete = 0
             ORDER BY 
                 ゲスト番号
         """
@@ -240,7 +242,7 @@ def get_patient_records(patient_id):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # 患者情報の取得
+        # 患者情報の取得 - isActive=1, isDelete=0 を追加
         patient_query = """
             SELECT 
                 uId, ゲスト番号, 漢字氏名, 生年月日, 性別
@@ -248,6 +250,8 @@ def get_patient_records(patient_id):
                 view_cresc_data.ゲスト基本情報
             WHERE 
                 ゲスト番号 = ?
+                AND isActive = 1
+                AND isDelete = 0
         """
         
         cursor.execute(patient_query, (patient_id,))
@@ -292,7 +296,7 @@ def get_patient_records(patient_id):
                 "patientName": patient_info.get('patientName', '')
             })
         
-        # カルテ記載の取得
+        # カルテ記載の取得 - isActive=1, isDelete=0 は既に適用されている
         records_query = """
             SELECT 
                 k.uId AS カルテID,
@@ -342,24 +346,36 @@ def get_patient_records(patient_id):
             else:
                 formatted_date = str(record_date)
             
-            # 診療科の取得
+            # 診療科の取得 - isActive=1, isDelete=0 を追加
             診療科 = "不明"
             診療科uId = record.get('診療科uId')
             if 診療科uId:
                 try:
-                    cursor.execute("SELECT 診療科名 FROM view_cresc_data.診療科 WHERE uId = ?", (診療科uId,))
+                    cursor.execute("""
+                        SELECT 診療科名 
+                        FROM view_cresc_data.診療科 
+                        WHERE uId = ? 
+                        AND isActive = 1 
+                        AND isDelete = 0
+                    """, (診療科uId,))
                     科row = cursor.fetchone()
                     if 科row:
                         診療科 = 科row[0]
                 except Exception as e:
                     logger.error(f"診療科名取得エラー: {e}")
             
-            # 担当医の取得
+            # 担当医の取得 - isActive=1, isDelete=0 を追加
             担当医 = "不明"
             担当医ID = record.get('担当医ID')
             if 担当医ID:
                 try:
-                    cursor.execute("SELECT 漢字氏名 FROM view_cresc_data.ユーザー WHERE uId = ?", (担当医ID,))
+                    cursor.execute("""
+                        SELECT 漢字氏名 
+                        FROM view_cresc_data.ユーザー 
+                        WHERE uId = ? 
+                        AND isActive = 1 
+                        AND isDelete = 0
+                    """, (担当医ID,))
                     医row = cursor.fetchone()
                     if 医row:
                         担当医 = 医row[0]
@@ -390,7 +406,7 @@ def get_patient_records(patient_id):
             # 全ての記載内容を取得
             for content_id in content_ids:
                 try:
-                    # 記載内容の取得
+                    # 記載内容の取得 - isActive=1, isDelete=0 を追加
                     content_query = """
                         SELECT 
                             uId, 記載区分, 記載内容
@@ -398,6 +414,8 @@ def get_patient_records(patient_id):
                             cresc_data.カルテ記載内容
                         WHERE 
                             uId = ?
+                            AND isActive = 1
+                            AND isDelete = 0
                     """
                     
                     cursor.execute(content_query, (content_id,))

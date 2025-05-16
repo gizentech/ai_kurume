@@ -31,7 +31,7 @@ export default async function handler(req, res) {
   } catch (error) {
     console.error('患者記録取得エラー:', error);
     return res.status(500).json({
-      error: '患者記録の取得に失敗しました: ' + error.message,
+      error: 'データベースに接続できませんでした。Pythonサーバーが起動しているか確認してください。',
       records: '',
       patientName: ''
     });

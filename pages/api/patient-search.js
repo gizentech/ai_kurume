@@ -9,6 +9,8 @@ export default async function handler(req, res) {
   try {
     console.log("CSVデータから患者情報を取得しています");
     const query = req.query.query || '';
+    
+    // 患者データ取得を試みる
     const patients = await searchPatients(query);
     
     console.log(`${patients.length}人の患者が見つかりました`);
@@ -29,9 +31,12 @@ export default async function handler(req, res) {
     return res.status(200).json({ patients: formattedPatients });
   } catch (error) {
     console.error('患者検索エラー:', error);
+    
+    // エラーが発生した場合は空の配列を返し、エラー情報を含める
     return res.status(500).json({ 
       patients: [],
-      error: '患者検索に失敗しました: ' + error.message
+      error: 'データベース接続に失敗しました。システム管理者にお問い合わせください。',
+      details: error.message
     });
   }
 }
