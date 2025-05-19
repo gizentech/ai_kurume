@@ -12,24 +12,28 @@ export default function Sidebar() {
   };
 
   // ナビゲーションメニュー項目
-  const navigationItems = [
-    {
-      name: 'ダッシュボード',
-      path: '/',
-      icon: 'fas fa-home'
-    },
-    {
-      name: 'AI診療サマリー',
-      path: '/generation',
-      icon: 'fas fa-robot'
-    },
-    {
-      name: '診療録検索',
-      path: '/records',
-      icon: 'fas fa-search'
-    }
-    // 他の既存メニュー項目
-  ];
+const navigationItems = [
+  {
+    name: 'ダッシュボード',
+    path: '/',
+    icon: 'fas fa-home'
+  },
+  {
+    name: 'AI診療サマリー',
+    path: '/generation',
+    icon: 'fas fa-robot'
+  },
+  {
+    name: '診療録検索',
+    path: '/records',
+    icon: 'fas fa-search'
+  },
+  {
+    name: 'JSON変換ツール',  // 新しく追加
+    path: '/json-converter',
+    icon: 'fas fa-code'
+  }
+];
 
   return (
     <div className="fixed top-0 left-0 h-full w-64 bg-gray-800 text-white shadow z-10">
