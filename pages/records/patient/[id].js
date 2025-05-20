@@ -107,84 +107,80 @@ export default function PatientRecordPage() {
     }
   };
 
-  // レコード文字列を構造化オブジェクトに変換する関数
-  const parseRecords = (recordsString) => {
-    if (!recordsString || typeof recordsString !== 'string') {
-      return [];
-    }
+  // pages/records/patient/[id].js の parseRecords 関数を修正
+const parseRecords = (recordsString) => {
+  if (!recordsString || typeof recordsString !== 'string') {
+    return [];
+  }
+  
+  const records = [];
+  // '---' で区切られた記録をパース
+  const recordStrings = recordsString.split('\n\n---\n\n');
+  
+  recordStrings.forEach((recordStr, index) => {
+    const record = { 
+      id: index, 
+      recordId: `record_${index}`,
+      originalText: recordStr // デバッグ用に元のテキストを保持
+    };
+    const lines = recordStr.split('\n');
     
-    const records = [];
-    // '---' で区切られた記録をパース
-    const recordStrings = recordsString.split('\n\n---\n\n');
+    let currentSection = '';
+    let sectionContent = '';
     
-    recordStrings.forEach((recordStr, index) => {
-      const record = { id: index, recordId: `record_${index}` };
-      const lines = recordStr.split('\n');
+    lines.forEach(line => {
+      // 'セクション：内容' の形式を検出
+      const sectionMatch = line.match(/^([^：]+)：(.*)$/);
       
-      let currentSection = '';
-      let sectionContent = '';
-      
-      lines.forEach(line => {
-        // 'セクション：内容' の形式を検出
-        const sectionMatch = line.match(/^([^：]+)：(.*)$/);
+      if (sectionMatch) {
+        // 前のセクションがあれば保存
+        if (currentSection && sectionContent !== null) {
+          record[currentSection] = sectionContent.trim();
+        }
         
-        if (sectionMatch) {
-          // 前のセクションがあれば保存
-          if (currentSection && sectionContent) {
-            record[currentSection] = sectionContent.trim();
-          }
-          
-          currentSection = sectionMatch[1].trim();
-          sectionContent = sectionMatch[2];
-        } else if (currentSection) {
-          // 継続行を追加
-          sectionContent += '\n' + line;
-        }
-      });
-      
-      // 最後のセクションを保存
-      if (currentSection && sectionContent) {
-        record[currentSection] = sectionContent.trim();
+        currentSection = sectionMatch[1].trim();
+        sectionContent = sectionMatch[2] || '';
+      } else if (currentSection) {
+        // 継続行を追加
+        sectionContent += '\n' + line;
       }
-      
-      // カテゴリは診療科
-      record.category = record['診療科'] || '不明';
-      
-      // SOAPフォーマットかどうかを判定
-      const soapSections = ['Subject', 'Object', 'Assessment', 'Plan'];
-      const hasSoapSections = soapSections.some(section => record[section]);
-      
-      if (hasSoapSections) {
-        record['記載区分'] = 'SOAP';
-      } else if (record['記載方法']) {
-        record['記載区分'] = record['記載方法'];
-      } else if (record['記載区分']) {
-        // 既に記載区分がある場合はそのまま
-      } else {
-        record['記載区分'] = '記録';
-      }
-      
-      // JSONテキストを適切に処理
-      Object.keys(record).forEach(key => {
-        const value = record[key];
-        if (typeof value === 'string' && 
-           (value.includes('{"Text"') || value.includes('"Text":') || 
-            value.includes('\\{"Text"') || value.includes('\\"Text\\":'))) {
-          try {
-            // テキスト抽出を試みる
-            record[key] = extractTextFromJSON(value);
-          } catch (e) {
-            // 抽出に失敗した場合は元の値を保持
-            console.warn(`JSONパース失敗 (${key}):`, e);
-          }
-        }
-      });
-      
-      records.push(record);
     });
     
-    return records;
-  };
+    // 最後のセクションを保存
+    if (currentSection && sectionContent !== null) {
+      record[currentSection] = sectionContent.trim();
+    }
+    
+    // カテゴリは診療科
+    record.category = record['診療科'] || '不明';
+    
+    // SOAPフォーマットかどうかを判定
+    const soapSections = ['Subject', 'Object', 'Assessment', 'Plan'];
+    const hasSoapSections = soapSections.some(section => record[section]);
+    
+    if (hasSoapSections) {
+      record['記載区分'] = 'SOAP';
+    } else if (record['記載方法']) {
+      record['記載区分'] = record['記載方法'];
+    } else if (record['記載区分']) {
+      // 既に記載区分がある場合はそのまま
+    } else {
+      record['記載区分'] = '記録';
+    }
+    
+    // 空の記録は除外
+    const hasContent = Object.keys(record).some(key => 
+      !['id', 'recordId', 'category', 'originalText'].includes(key) && 
+      record[key] && record[key].toString().trim()
+    );
+    
+    if (hasContent) {
+      records.push(record);
+    }
+  });
+  
+  return records;
+};
 
   // JSONからテキストを抽出する関数
   const extractTextFromJSON = (jsonText) => {

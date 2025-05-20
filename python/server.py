@@ -1,5 +1,4 @@
 # python/server.py
-
 from flask import Flask, request, jsonify
 import pyodbc
 import logging
@@ -13,9 +12,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)  # CORSを有効化
+CORS(app)
 
-# データベース接続関数
 def get_db_connection():
     try:
         driver_name = "InterSystems IRIS ODBC35"
@@ -40,129 +38,248 @@ def get_db_connection():
         raise
 
 def extract_text_from_json(content):
-    """JSONフォーマットからテキスト部分だけを抽出して整形 - 改善版"""
+    """JSON配列からテキストを抽出する - JSONコンバーター形式に対応"""
     if not content:
         return ""
     
     try:
-        # JSONデータでない場合はそのまま返す
-        if not isinstance(content, str) or not ('"Text"' in content):
+        # 文字列でない場合はそのまま返す
+        if not isinstance(content, str):
+            return str(content)
+        
+        # JSONフォーマットでない場合はそのまま返す
+        if '"Text"' not in content:
             return content
         
-        logger.debug(f"JSONテキスト抽出処理開始: 長さ={len(content)}")
+        logger.debug(f"JSON抽出開始: 長さ={len(content)}")
         
-        # 正規表現で全てのTextフィールドを一度に抽出する方法
-        all_text_fields = re.findall(r'"Text"\s*:\s*"([^"]*(?:\\"|[^"])*)"', content)
-        if all_text_fields:
-            # エスケープされた引用符を処理
-            processed_texts = []
-            for text in all_text_fields:
-                # エスケープシーケンスを解決
-                processed = text.replace('\\"', '"').replace('\\\\', '\\')
-                processed_texts.append(processed)
+        # カンマで区切られた複数のJSON配列を分割
+        # 例: "[{...}]","[{...}]" のような形式を処理
+        
+        # 一番外側の引用符を除去
+        cleaned_content = content.strip()
+        if cleaned_content.startswith('"') and cleaned_content.endswith('"'):
+            cleaned_content = cleaned_content[1:-1]
+        
+        # エスケープされた引用符を元に戻す
+        cleaned_content = cleaned_content.replace('""', '"')
+        
+        # カンマで区切られたJSON配列を分割
+        json_arrays = []
+        current_array = ""
+        bracket_count = 0
+        in_quotes = False
+        escaped = False
+        
+        i = 0
+        while i < len(cleaned_content):
+            char = cleaned_content[i]
             
-            # すべてのテキストを結合
-            result = ' '.join([t for t in processed_texts if t.strip()])
-            logger.debug(f"正規表現による抽出結果: 長さ={len(result)}")
-            return result
+            if escaped:
+                escaped = False
+                current_array += char
+                i += 1
+                continue
+            
+            if char == '\\':
+                escaped = True
+                current_array += char
+                i += 1
+                continue
+            
+            if char == '"' and not escaped:
+                in_quotes = not in_quotes
+                current_array += char
+            elif not in_quotes:
+                if char == '[':
+                    if bracket_count == 0:
+                        current_array = char
+                    else:
+                        current_array += char
+                    bracket_count += 1
+                elif char == ']':
+                    current_array += char
+                    bracket_count -= 1
+                    if bracket_count == 0:
+                        json_arrays.append(current_array)
+                        current_array = ""
+                        # 次のJSON配列まで進む（", を探す）
+                        while i + 1 < len(cleaned_content) and cleaned_content[i + 1] in ['"', ',', ' ']:
+                            i += 1
+                elif bracket_count > 0:
+                    current_array += char
+            else:
+                current_array += char
+            
+            i += 1
         
-        # 別のアプローチ: JSON文字列を解析してみる
-        try:
-            # JSON配列の場合
-            if content.strip().startswith('[') and content.strip().endswith(']'):
-                try:
-                    # 配列全体をパースしてみる
-                    json_array = json.loads(content)
-                    texts = []
+        # 残ったものがあれば追加
+        if current_array.strip():
+            json_arrays.append(current_array.strip())
+        
+        # JSON配列が見つからなかった場合は全体を1つの配列として処理
+        if not json_arrays:
+            json_arrays = [cleaned_content]
+        
+        # 各JSON配列からテキストを抽出
+        all_texts = []
+        
+        for json_array_str in json_arrays:
+            try:
+                # JSON配列として解析
+                json_array = json.loads(json_array_str)
+                
+                if isinstance(json_array, list):
                     for item in json_array:
                         if isinstance(item, dict) and 'Text' in item:
-                            texts.append(item['Text'])
-                    
-                    if texts:
-                        result = ' '.join([t for t in texts if t.strip()])
-                        logger.debug(f"JSON配列パースによる抽出結果: 長さ={len(result)}")
-                        return result
-                except:
-                    pass  # 配列パースに失敗した場合は次の方法を試す
+                            text = item['Text']
+                            # JSONコンバーターの規則：空のTextは改行として扱う
+                            if text == "":
+                                all_texts.append("")  # 空行として保持
+                            elif text.strip():
+                                all_texts.append(text.strip())
+                elif isinstance(json_array, dict) and 'Text' in json_array:
+                    # 単一のオブジェクトの場合
+                    text = json_array['Text']
+                    if text == "":
+                        all_texts.append("")
+                    elif text.strip():
+                        all_texts.append(text.strip())
             
-            # エスケープ処理を修正して解析を試みる
-            modified_content = content.replace('\\"', '"').replace('\\\\', '\\')
-            
-            # 文字列がダブルクォートで始まり終わる場合、それを削除して解析
-            if modified_content.startswith('"') and modified_content.endswith('"'):
-                try:
-                    inner_content = json.loads(modified_content[1:-1])
-                    if isinstance(inner_content, list):
-                        texts = []
-                        for item in inner_content:
-                            if isinstance(item, dict) and 'Text' in item:
-                                texts.append(item['Text'])
-                        
-                        if texts:
-                            result = ' '.join([t for t in texts if t.strip()])
-                            logger.debug(f"修正JSONパースによる抽出結果: 長さ={len(result)}")
-                            return result
-                except:
-                    pass  # この方法も失敗した場合は次へ
-            
-            # もっと強力な方法: 文字列操作で全てのテキストを抽出
-            # すべての "Text": "..." パターンを探して抽出
-            text_blocks = []
-            start_idx = 0
-            
-            while True:
-                # "Text": を探す
-                text_marker = content.find('"Text":', start_idx)
-                if text_marker == -1:
-                    break
-                
-                # テキスト開始の引用符を探す
-                start_quote = content.find('"', text_marker + 7)  # 7 は "Text": の長さ
-                if start_quote == -1:
-                    break
-                
-                # テキスト終了の引用符を探す (エスケープされた引用符をスキップ)
-                end_quote = start_quote + 1
-                while True:
-                    end_quote = content.find('"', end_quote)
-                    if end_quote == -1:
-                        break
-                    
-                    # エスケープされていない引用符を見つけたか確認
-                    if content[end_quote - 1] != '\\':
-                        break
-                    end_quote += 1
-                
-                if end_quote == -1:
-                    break
-                
-                # テキストを抽出して追加
-                text_value = content[start_quote + 1:end_quote]
-                # エスケープを処理
-                text_value = text_value.replace('\\"', '"').replace('\\\\', '\\')
-                text_blocks.append(text_value)
-                
-                # 次の検索開始位置を設定
-                start_idx = end_quote + 1
-            
-            if text_blocks:
-                result = ' '.join([t for t in text_blocks if t.strip()])
-                logger.debug(f"手動文字列操作による抽出結果: 長さ={len(result)}")
-                return result
-            
-        except Exception as e:
-            logger.error(f"JSON構造解析エラー: {e}")
+            except json.JSONDecodeError as e:
+                logger.debug(f"JSON解析エラー: {e}, 内容: {json_array_str[:100]}...")
+                # JSONとして解析できない場合は正規表現で抽出
+                text_matches = re.findall(r'"Text"\s*:\s*"([^"]*)"', json_array_str)
+                for match in text_matches:
+                    if match == "":
+                        all_texts.append("")
+                    elif match.strip():
+                        all_texts.append(match.strip())
         
-        # 最後の手段: オリジナルの文字列を返す
-        logger.warning("テキスト抽出失敗: オリジナルの内容を返します")
-        return content
+        # JSONコンバーターの規則に従って結合
+        # 連続する非空行は改行で結合、空のTextは段落の区切りとして扱う
+        result_parts = []
+        current_paragraph = []
+        
+        for text in all_texts:
+            if text == "":
+                # 空行の場合、現在の段落を結合して追加
+                if current_paragraph:
+                    result_parts.append('\n'.join(current_paragraph))
+                    current_paragraph = []
+                # 空行として段落区切りを追加
+                result_parts.append("")
+            else:
+                # 非空行の場合、現在の段落に追加
+                current_paragraph.append(text)
+        
+        # 最後の段落を追加
+        if current_paragraph:
+            result_parts.append('\n'.join(current_paragraph))
+        
+        # 結果を改行で結合（空の要素は改行として扱う）
+        result = '\n'.join(result_parts)
+        
+        # 連続する改行を整理
+        result = re.sub(r'\n{3,}', '\n\n', result)
+        
+        logger.debug(f"抽出完了: {len(result)}文字")
+        return result
         
     except Exception as e:
-        logger.error(f"JSONからのテキスト抽出エラー: {e}")
-        # エラーが発生しても何かしらの内容を返すべき
+        logger.error(f"JSONテキスト抽出エラー: {e}")
         return content
 
-# 患者検索エンドポイント
+def get_department_name(dept_uid, cursor):
+    """診療科名を取得"""
+    if not dept_uid:
+        return "不明"
+    
+    try:
+        cursor.execute("""
+            SELECT name 
+            FROM cresc_data.診療科マスター 
+            WHERE uId = ? AND isActive = 1 AND isDelete = 0
+        """, (dept_uid,))
+        
+        result = cursor.fetchone()
+        if result:
+            return result[0]
+    except Exception as e:
+        logger.debug(f"診療科マスター検索エラー: {e}")
+    
+    return "不明"
+
+def get_user_name(user_uid, cursor):
+    """ユーザー名を取得"""
+    if not user_uid:
+        return "不明"
+    
+    try:
+        # まずnameフィールドを試す
+        cursor.execute("""
+            SELECT name 
+            FROM cresc_data.ユーザー 
+            WHERE uId = ? AND isActive = 1 AND isDelete = 0
+        """, (user_uid,))
+        
+        result = cursor.fetchone()
+        if result and result[0]:
+            return result[0]
+        
+        # nameがない場合はview_cresc_dataから漢字氏名を取得
+        cursor.execute("""
+            SELECT 漢字氏名 
+            FROM view_cresc_data.ユーザー 
+            WHERE uId = ? AND isActive = 1 AND isDelete = 0
+        """, (user_uid,))
+        
+        result = cursor.fetchone()
+        if result and result[0]:
+            return result[0]
+    except Exception as e:
+        logger.debug(f"ユーザー名取得エラー: {e}")
+    
+    return "不明"
+
+def get_record_type_name(type_uid, cursor):
+    """記載種別名を取得"""
+    if not type_uid:
+        return "不明"
+    
+    try:
+        cursor.execute("""
+            SELECT name 
+            FROM cresc_data.カルテ記載種別マスター 
+            WHERE uId = ? AND isActive = 1 AND isDelete = 0
+        """, (type_uid,))
+        
+        result = cursor.fetchone()
+        if result:
+            return result[0]
+    except Exception as e:
+        logger.debug(f"記載種別取得エラー: {e}")
+    
+    return "不明"
+
+def format_insurance_type(insurance_code):
+    """保険自費区分を文字列に変換"""
+    insurance_map = {
+        0: "保険",
+        1: "自費", 
+        2: "混合",
+        3: "その他"
+    }
+    return insurance_map.get(insurance_code, f"不明({insurance_code})")
+
+def format_inout_type(inout_code):
+    """入外区分を文字列に変換"""
+    inout_map = {
+        0: "外来",
+        1: "入院"
+    }
+    return inout_map.get(inout_code, f"不明({inout_code})")
+
 @app.route('/api/search-patients', methods=['GET'])
 def search_patients():
     try:
@@ -176,10 +293,9 @@ def search_patients():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # 検索クエリの作成 - isActive=1, isDelete=0 を追加
         sql_query = """
-            SELECT 
-                ゲスト番号, 漢字氏名, 生年月日, 性別
+            SELECT TOP 20
+                ゲスト番号, 漢字氏名, 生年月日, 性別, uId
             FROM 
                 view_cresc_data.ゲスト基本情報
             WHERE 
@@ -187,30 +303,28 @@ def search_patients():
                 AND isActive = 1 
                 AND isDelete = 0
             ORDER BY 
-                ゲスト番号
+                ゲスト番号 DESC
         """
         
         search_pattern = f"%{query}%"
         cursor.execute(sql_query, (search_pattern, search_pattern))
         
-        # 結果の整形
         patients = []
         columns = [column[0] for column in cursor.description]
         
         for row in cursor.fetchall():
             patient = dict(zip(columns, row))
             
-            # 患者IDの整形
             patient_id = patient.get('ゲスト番号', '')
-            if isinstance(patient_id, int):
-                patient_id = f"{patient_id:08d}"
+            if isinstance(patient_id, (int, float)):
+                patient_id = f"{int(patient_id):08d}"
             elif isinstance(patient_id, str):
                 patient_id = patient_id.zfill(8)
                 
-            # 生年月日の整形
             birth_date = patient.get('生年月日', '')
             if birth_date and len(str(birth_date)) == 8:
-                birth_date = f"{birth_date[:4]}年{birth_date[4:6]}月{birth_date[6:8]}日"
+                birth_date_str = str(birth_date)
+                birth_date = f"{birth_date_str[:4]}年{birth_date_str[4:6]}月{birth_date_str[6:8]}日"
                 
             patients.append({
                 '患者ID': patient_id,
@@ -229,20 +343,18 @@ def search_patients():
         logger.error(f"患者検索エラー: {e}")
         return jsonify({"error": str(e), "patients": []})
 
-# 患者記録取得エンドポイント - SOAPフォーマットに統合した修正版
 @app.route('/api/patient-records/<patient_id>', methods=['GET'])
 def get_patient_records(patient_id):
     try:
         logger.info(f"患者記録取得: 患者ID = {patient_id}")
         
-        # 患者IDの整形
         if patient_id.isdigit():
             patient_id = patient_id.zfill(8)
         
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # 患者情報の取得 - isActive=1, isDelete=0 を追加
+        # 患者情報の取得
         patient_query = """
             SELECT 
                 uId, ゲスト番号, 漢字氏名, 生年月日, 性別
@@ -274,9 +386,11 @@ def get_patient_records(patient_id):
         patient_uid = patient.get('uId')
         logger.info(f"患者UID: {patient_uid}")
         
+        # 生年月日の整形
         birth_date = patient.get('生年月日', '')
         if birth_date and len(str(birth_date)) == 8:
-            birth_date = f"{birth_date[:4]}年{birth_date[4:6]}月{birth_date[6:8]}日"
+            birth_date_str = str(birth_date)
+            birth_date = f"{birth_date_str[:4]}年{birth_date_str[4:6]}月{birth_date_str[6:8]}日"
         
         patient_info = {
             'patientId': patient_id,
@@ -285,38 +399,7 @@ def get_patient_records(patient_id):
             'gender': patient.get('性別', '')
         }
         
-        # 診療記録の取得 - uidを使用
-        if not patient_uid:
-            logger.error("患者UIDが取得できません")
-            cursor.close()
-            conn.close()
-            return jsonify({
-                "error": "患者UIDが取得できません",
-                "records": "",
-                "patientName": patient_info.get('patientName', '')
-            })
-        
-        # カルテ記載の取得 - isActive=1, isDelete=0 は既に適用されている
-        records_query = """
-            SELECT 
-                k.uId AS カルテID,
-                k.記載日時 AS 日付,
-                k.記載方法,
-                k.記載者uId AS 担当医ID,
-                k.記載内容リスト,
-                k.診療科uId
-            FROM 
-                cresc_data.カルテ記載 k
-            WHERE
-                k.患者uId = ?
-                AND k.isActive = 1
-                AND k.isDelete = 0
-            ORDER BY
-                k.記載日時 DESC
-        """
-        
-        cursor.execute(records_query, (patient_uid,))
-        records_rows = cursor.fetchall()
+
         
         if not records_rows:
             cursor.close()
@@ -337,76 +420,64 @@ def get_patient_records(patient_id):
             
             # 日付の整形
             record_date = record.get('日付', '')
-            if record_date and str(record_date).isdigit() and len(str(record_date)) >= 8:
-                try:
-                    dt = datetime.strptime(str(record_date)[:8], "%Y%m%d")
-                    formatted_date = dt.strftime("%Y年%m月%d日")
-                except:
-                    formatted_date = str(record_date)
+            if record_date:
+                if isinstance(record_date, (int, float)):
+                    date_str = str(int(record_date))
+                else:
+                    date_str = str(record_date)
+                
+                if len(date_str) >= 14:  # YYYYMMDDHHmmss形式
+                    try:
+                        dt = datetime.strptime(date_str[:14], "%Y%m%d%H%M%S")
+                        formatted_date = dt.strftime("%Y年%m月%d日 %H:%M")
+                    except:
+                        try:
+                            dt = datetime.strptime(date_str[:8], "%Y%m%d")
+                            formatted_date = dt.strftime("%Y年%m月%d日")
+                        except:
+                            formatted_date = date_str
+                elif len(date_str) >= 8:
+                    try:
+                        dt = datetime.strptime(date_str[:8], "%Y%m%d")
+                        formatted_date = dt.strftime("%Y年%m月%d日")
+                    except:
+                        formatted_date = date_str
+                else:
+                    formatted_date = date_str
             else:
-                formatted_date = str(record_date)
+                formatted_date = "日付不明"
             
-            # 診療科の取得 - isActive=1, isDelete=0 を追加
-            診療科 = "不明"
-            診療科uId = record.get('診療科uId')
-            if 診療科uId:
-                try:
-                    cursor.execute("""
-                        SELECT 診療科名 
-                        FROM view_cresc_data.診療科 
-                        WHERE uId = ? 
-                        AND isActive = 1 
-                        AND isDelete = 0
-                    """, (診療科uId,))
-                    科row = cursor.fetchone()
-                    if 科row:
-                        診療科 = 科row[0]
-                except Exception as e:
-                    logger.error(f"診療科名取得エラー: {e}")
-            
-            # 担当医の取得 - isActive=1, isDelete=0 を追加
-            担当医 = "不明"
-            担当医ID = record.get('担当医ID')
-            if 担当医ID:
-                try:
-                    cursor.execute("""
-                        SELECT 漢字氏名 
-                        FROM view_cresc_data.ユーザー 
-                        WHERE uId = ? 
-                        AND isActive = 1 
-                        AND isDelete = 0
-                    """, (担当医ID,))
-                    医row = cursor.fetchone()
-                    if 医row:
-                        担当医 = 医row[0]
-                except Exception as e:
-                    logger.error(f"担当医名取得エラー: {e}")
-            
-            # 記載方法
-            記載方法 = record.get('記載方法', 'SOAP')  # デフォルトをSOAPに設定
+            # 各種情報の取得
+            診療科 = get_department_name(record.get('診療科uId'), cursor)
+            担当医 = get_user_name(record.get('担当医UID'), cursor)
+            指示者 = get_user_name(record.get('指示者UID'), cursor)
+            記載種別 = get_record_type_name(record.get('記載種別uId'), cursor)
+            if not 記載種別 or 記載種別 == "不明":
+                記載種別 = record.get('記載方法', 'SOAP')
+            保険区分 = format_insurance_type(record.get('保険自費区分'))
+            入外区分 = format_inout_type(record.get('入外区分'))
             
             # 記載内容リストの取得
             content_list = record.get('記載内容リスト', '')
             if not content_list:
-                continue  # 内容がなければスキップ
+                continue
             
-            content_ids = str(content_list).split(',')
+            content_ids = [cid.strip() for cid in str(content_list).split(',') if cid.strip()]
             
-            # 1つの診療記録にSOAPの全セクションをまとめる
+            # SOAPセクション用の辞書
             soap_content = {
-                'Subject': '',
-                'Object': '',
-                'Assessment': '',
-                'Plan': ''
+                'Subject': [],
+                'Object': [],
+                'Assessment': [],
+                'Plan': []
             }
             
-            # その他のセクション用の辞書
+            # その他のセクション用の辞書（通常のテキストフィールドとして扱う）
             other_content = {}
             
             # 全ての記載内容を取得
             for content_id in content_ids:
                 try:
-                    # 記載内容の取得 - isActive=1, isDelete=0 を追加
                     content_query = """
                         SELECT 
                             uId, 記載区分, 記載内容
@@ -427,41 +498,47 @@ def get_patient_records(patient_id):
                         # JSONからテキストを抽出
                         formatted_content = extract_text_from_json(content_text)
                         
-                        # SOAPセクションに追加
+                        # セクション名の正規化
+                        section = str(section).strip() if section else "記録"
+                        
+                        # SOAPセクションのみ特別扱い
                         if section in soap_content:
-                            soap_content[section] = formatted_content
+                            soap_content[section].append(formatted_content)
                         else:
-                            # その他のセクション
-                            other_content[section] = formatted_content
+                            # それ以外はすべて通常のテキストフィールドとして扱う
+                            if section not in other_content:
+                                other_content[section] = []
+                            other_content[section].append(formatted_content)
+                
                 except Exception as e:
                     logger.error(f"記載内容ID {content_id} の取得中にエラー: {e}")
             
-            # 空のSOAPセクションを削除
-            for section in list(soap_content.keys()):
-                if not soap_content[section] or soap_content[section].strip() == "":
-                    del soap_content[section]
+            # 空のセクションを削除し、テキストを結合
+            soap_content = {k: '\n\n'.join(v) for k, v in soap_content.items() if v}
+            other_content = {k: '\n\n'.join(v) for k, v in other_content.items() if v}
             
-            # SOAPセクションが存在しない場合はスキップ
-            if not soap_content and not other_content:
-                continue
-            
-            # 記録を整形
-            record_text = f"日付：{formatted_date}\n"
-            record_text += f"診療科：{診療科}\n"
-            record_text += f"担当医：{担当医}\n"
-            record_text += f"記載方法：{記載方法}\n"
-            
-            # SOAPセクションを追加
-            for section, content in soap_content.items():
-                if content and content.strip():
+            # 何らかのコンテンツが存在する場合のみ記録を追加
+            if soap_content or other_content:
+                record_text = f"日付：{formatted_date}\n"
+                record_text += f"診療科：{診療科}\n"
+                record_text += f"担当医：{担当医}\n"
+                if 指示者 and 指示者 != "不明" and 指示者 != 担当医:
+                    record_text += f"指示者：{指示者}\n"
+                record_text += f"記載区分：{記載種別}\n"
+                record_text += f"保険区分：{保険区分}\n"
+                record_text += f"入外区分：{入外区分}\n"
+                
+                # SOAPセクションを定義順に追加（ヘッダーのみ）
+                soap_order = ['Subject', 'Object', 'Assessment', 'Plan']
+                for section in soap_order:
+                    if section in soap_content:
+                        record_text += f"{section}：{soap_content[section]}\n"
+                
+                # その他のセクションを追加（通常のテキストフィールドとして）
+                for section, content in other_content.items():
                     record_text += f"{section}：{content}\n"
-            
-            # その他のセクションを追加
-            for section, content in other_content.items():
-                if content and content.strip():
-                    record_text += f"{section}：{content}\n"
-            
-            formatted_records.append(record_text)
+                
+                formatted_records.append(record_text.rstrip())
         
         cursor.close()
         conn.close()
@@ -486,17 +563,20 @@ def get_patient_records(patient_id):
             "patientName": ""
         })
 
-# ヘルスチェックエンドポイント
 @app.route('/api/health', methods=['GET'])
 def health_check():
     try:
-        # 接続テスト
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # テスト用クエリ
-        cursor.execute("SELECT 1")
+        cursor.execute("SELECT 1 as test")
         result = cursor.fetchone()
+        
+        cursor.execute("SELECT COUNT(*) FROM view_cresc_data.ゲスト基本情報 WHERE isActive = 1 AND isDelete = 0")
+        patient_count = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM cresc_data.カルテ記載 WHERE isActive = 1 AND isDelete = 0")
+        record_count = cursor.fetchone()[0]
         
         cursor.close()
         conn.close()
@@ -504,9 +584,13 @@ def health_check():
         return jsonify({
             "status": "ok", 
             "message": "Python サーバーは正常に動作しています",
-            "db_connection": "成功"
+            "db_connection": "成功",
+            "patient_count": patient_count,
+            "record_count": record_count,
+            "test_result": result[0] if result else None
         })
     except Exception as e:
+        logger.error(f"ヘルスチェックエラー: {e}")
         return jsonify({
             "status": "error", 
             "message": f"データベース接続エラー: {str(e)}",
