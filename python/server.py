@@ -343,6 +343,7 @@ def search_patients():
         logger.error(f"患者検索エラー: {e}")
         return jsonify({"error": str(e), "patients": []})
 
+
 @app.route('/api/patient-records/<patient_id>', methods=['GET'])
 def get_patient_records(patient_id):
     try:
@@ -399,7 +400,32 @@ def get_patient_records(patient_id):
             'gender': patient.get('性別', '')
         }
         
-
+        # 診療記録の取得（正確なフィールド名を使用）
+        records_query = """
+            SELECT 
+                記載.uId,
+                記載.患者uId,
+                記載.updateStamp,
+                記載.診療科uId,
+                記載.記載者uId,
+                記載.指示者uId,
+                記載.updateUserId,
+                記載.記載種別uId,
+                記載.記載内容リスト,
+                記載.保険自費区分,
+                記載.入外区分
+            FROM 
+                cresc_data.カルテ記載 as 記載
+            WHERE
+                記載.患者uId = ?
+                AND 記載.isActive = 1
+                AND 記載.isDelete = 0
+            ORDER BY
+                記載.updateStamp DESC
+        """
+        
+        cursor.execute(records_query, (patient_uid,))
+        records_rows = cursor.fetchall()
         
         if not records_rows:
             cursor.close()
@@ -419,43 +445,21 @@ def get_patient_records(patient_id):
             record = dict(zip(records_columns, record_row))
             
             # 日付の整形
-            record_date = record.get('日付', '')
+            record_date = record.get('updateStamp', '')
             if record_date:
-                if isinstance(record_date, (int, float)):
-                    date_str = str(int(record_date))
-                else:
-                    date_str = str(record_date)
-                
-                if len(date_str) >= 14:  # YYYYMMDDHHmmss形式
-                    try:
-                        dt = datetime.strptime(date_str[:14], "%Y%m%d%H%M%S")
-                        formatted_date = dt.strftime("%Y年%m月%d日 %H:%M")
-                    except:
-                        try:
-                            dt = datetime.strptime(date_str[:8], "%Y%m%d")
-                            formatted_date = dt.strftime("%Y年%m月%d日")
-                        except:
-                            formatted_date = date_str
-                elif len(date_str) >= 8:
-                    try:
-                        dt = datetime.strptime(date_str[:8], "%Y%m%d")
-                        formatted_date = dt.strftime("%Y年%m月%d日")
-                    except:
-                        formatted_date = date_str
-                else:
-                    formatted_date = date_str
+                date_str = str(int(record_date)) if isinstance(record_date, (int, float)) else str(record_date)
             else:
-                formatted_date = "日付不明"
+                date_str = ""
             
             # 各種情報の取得
             診療科 = get_department_name(record.get('診療科uId'), cursor)
-            担当医 = get_user_name(record.get('担当医UID'), cursor)
-            指示者 = get_user_name(record.get('指示者UID'), cursor)
+            記載者 = get_user_name(record.get('記載者uId'), cursor)
+            指示者 = get_user_name(record.get('指示者uId'), cursor)
+            更新者 = get_user_name(record.get('updateUserId'), cursor)
             記載種別 = get_record_type_name(record.get('記載種別uId'), cursor)
-            if not 記載種別 or 記載種別 == "不明":
-                記載種別 = record.get('記載方法', 'SOAP')
-            保険区分 = format_insurance_type(record.get('保険自費区分'))
-            入外区分 = format_inout_type(record.get('入外区分'))
+            
+            # 記載タグの取得
+            記載タグ = get_record_tags(record.get('uId'), cursor)
             
             # 記載内容リストの取得
             content_list = record.get('記載内容リスト', '')
@@ -472,8 +476,11 @@ def get_patient_records(patient_id):
                 'Plan': []
             }
             
-            # その他のセクション用の辞書（通常のテキストフィールドとして扱う）
+            # その他のセクション用の辞書
             other_content = {}
+            
+            # 記載方法の判定用
+            record_method = ""
             
             # 全ての記載内容を取得
             for content_id in content_ids:
@@ -501,11 +508,18 @@ def get_patient_records(patient_id):
                         # セクション名の正規化
                         section = str(section).strip() if section else "記録"
                         
-                        # SOAPセクションのみ特別扱い
+                        # 記載方法の判定
+                        if section in ['自由記載', '自由']:
+                            record_method = "自由記載"
+                        elif section in ['超音波']:
+                            record_method = "超音波"
+                        elif section in soap_content:
+                            record_method = "SOAP"
+                        
+                        # SOAPセクションか他のセクションかを判別
                         if section in soap_content:
                             soap_content[section].append(formatted_content)
                         else:
-                            # それ以外はすべて通常のテキストフィールドとして扱う
                             if section not in other_content:
                                 other_content[section] = []
                             other_content[section].append(formatted_content)
@@ -513,28 +527,62 @@ def get_patient_records(patient_id):
                 except Exception as e:
                     logger.error(f"記載内容ID {content_id} の取得中にエラー: {e}")
             
+            # 記載方法が判定できない場合のデフォルト
+            if not record_method:
+                if any(soap_content.values()):
+                    record_method = "SOAP"
+                elif 記載種別 and ('自由' in 記載種別):
+                    record_method = "自由記載"
+                elif 記載種別 and ('超音波' in 記載種別):
+                    record_method = "超音波"
+                else:
+                    record_method = "記録"
+            
             # 空のセクションを削除し、テキストを結合
             soap_content = {k: '\n\n'.join(v) for k, v in soap_content.items() if v}
             other_content = {k: '\n\n'.join(v) for k, v in other_content.items() if v}
             
             # 何らかのコンテンツが存在する場合のみ記録を追加
             if soap_content or other_content:
-                record_text = f"日付：{formatted_date}\n"
+                record_text = f"日付：{date_str}\n"
                 record_text += f"診療科：{診療科}\n"
-                record_text += f"担当医：{担当医}\n"
-                if 指示者 and 指示者 != "不明" and 指示者 != 担当医:
+                record_text += f"担当医：{記載者 or 更新者}\n"
+                if 記載者 and 記載者 != "不明":
+                    record_text += f"記載者：{記載者}\n"
+                if 指示者 and 指示者 != "不明":
                     record_text += f"指示者：{指示者}\n"
-                record_text += f"記載区分：{記載種別}\n"
-                record_text += f"保険区分：{保険区分}\n"
-                record_text += f"入外区分：{入外区分}\n"
+                if 更新者 and 更新者 != "不明":
+                    record_text += f"更新者：{更新者}\n"
+                record_text += f"記載方法：{record_method}\n"
+                if 記載種別 and 記載種別 != "不明":
+                    record_text += f"記載区分：{記載種別}\n"
                 
-                # SOAPセクションを定義順に追加（ヘッダーのみ）
+                # 保険自費区分と入外区分の処理
+                保険区分 = record.get('保険自費区分')
+                入外区分 = record.get('入外区分')
+                
+                if 保険区分 == 3:
+                    record_text += f"保険区分：保険\n"
+                elif 保険区分 == 1:
+                    record_text += f"保険区分：自費\n"
+                elif 保険区分 == 0:
+                    record_text += f"保険区分：未登録\n"
+                
+                if 入外区分 == 0:
+                    record_text += f"入外区分：外来\n"
+                elif 入外区分 == 1:
+                    record_text += f"入外区分：入院\n"
+                
+                if 記載タグ:
+                    record_text += f"記載タグ：{記載タグ}\n"
+                
+                # SOAPセクションを定義順に追加
                 soap_order = ['Subject', 'Object', 'Assessment', 'Plan']
                 for section in soap_order:
                     if section in soap_content:
                         record_text += f"{section}：{soap_content[section]}\n"
                 
-                # その他のセクションを追加（通常のテキストフィールドとして）
+                # その他のセクションを追加
                 for section, content in other_content.items():
                     record_text += f"{section}：{content}\n"
                 
@@ -562,6 +610,127 @@ def get_patient_records(patient_id):
             "records": "",
             "patientName": ""
         })
+
+# 他の関数は前回と同じ
+def get_record_tags(record_uid, cursor):
+    """記載記録に関連するタグを取得"""
+    if not record_uid:
+        return ""
+    
+    try:
+        tag_query = """
+            SELECT items 
+            FROM cresc_data.カルテ記載タグ 
+            WHERE uId = ? AND isActive = 1 AND isDelete = 0
+        """
+        
+        cursor.execute(tag_query, (record_uid,))
+        tag_rows = cursor.fetchall()
+        
+        tag_names = []
+        for tag_row in tag_rows:
+            if tag_row[0]:
+                tag_uids = [uid.strip() for uid in str(tag_row[0]).split(',') if uid.strip()]
+                for tag_uid in tag_uids:
+                    tag_name = get_tag_name(tag_uid, cursor)
+                    if tag_name and tag_name != "不明":
+                        tag_names.append(tag_name)
+        
+        return ", ".join(tag_names)
+    except Exception as e:
+        logger.debug(f"記載タグ取得エラー: {e}")
+    
+    return ""
+
+def get_tag_name(tag_uid, cursor):
+    """記載タグ名を取得"""
+    if not tag_uid:
+        return "不明"
+    
+    try:
+        cursor.execute("""
+            SELECT name 
+            FROM cresc_data.カルテ記載タグマスター 
+            WHERE uId = ? AND isActive = 1 AND isDelete = 0
+        """, (tag_uid,))
+        
+        result = cursor.fetchone()
+        if result:
+            return result[0]
+    except Exception as e:
+        logger.debug(f"記載タグマスター検索エラー: {e}")
+    
+    return "不明"
+
+def get_department_name(dept_uid, cursor):
+    """診療科名を取得"""
+    if not dept_uid:
+        return "不明"
+    
+    try:
+        cursor.execute("""
+            SELECT name 
+            FROM cresc_data.診療科マスター 
+            WHERE uId = ? AND isActive = 1 AND isDelete = 0
+        """, (dept_uid,))
+        
+        result = cursor.fetchone()
+        if result:
+            return result[0]
+    except Exception as e:
+        logger.debug(f"診療科マスター検索エラー: {e}")
+    
+    return "不明"
+
+def get_user_name(user_uid, cursor):
+    """ユーザー名を取得"""
+    if not user_uid:
+        return "不明"
+    
+    try:
+        cursor.execute("""
+            SELECT name 
+            FROM cresc_data.ユーザー 
+            WHERE uId = ? AND isActive = 1 AND isDelete = 0
+        """, (user_uid,))
+        
+        result = cursor.fetchone()
+        if result and result[0]:
+            return result[0]
+        
+        cursor.execute("""
+            SELECT 漢字氏名 
+            FROM view_cresc_data.ユーザー 
+            WHERE uId = ? AND isActive = 1 AND isDelete = 0
+        """, (user_uid,))
+        
+        result = cursor.fetchone()
+        if result and result[0]:
+            return result[0]
+    except Exception as e:
+        logger.debug(f"ユーザー名取得エラー: {e}")
+    
+    return "不明"
+
+def get_record_type_name(type_uid, cursor):
+    """記載種別名を取得"""
+    if not type_uid:
+        return "不明"
+    
+    try:
+        cursor.execute("""
+            SELECT name 
+            FROM cresc_data.カルテ記載種別マスター 
+            WHERE uId = ? AND isActive = 1 AND isDelete = 0
+        """, (type_uid,))
+        
+        result = cursor.fetchone()
+        if result:
+            return result[0]
+    except Exception as e:
+        logger.debug(f"記載種別取得エラー: {e}")
+    
+    return "不明"
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
