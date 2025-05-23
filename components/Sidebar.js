@@ -1,4 +1,4 @@
-// components/Sidebar.js
+// components/Sidebar.js の修正
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -6,12 +6,10 @@ import { useRouter } from 'next/router';
 export default function Sidebar() {
   const router = useRouter();
 
-  // 現在のパスに基づいてメニューがアクティブかどうかを判断
   const isActive = (path) => {
     return router.pathname.startsWith(path);
   };
 
-  // ナビゲーションメニュー項目
   const navigationItems = [
     {
       name: 'ダッシュボード',
@@ -29,7 +27,12 @@ export default function Sidebar() {
       icon: 'fas fa-search'
     },
     {
-      name: '次回カルテ作成',  // 新しく追加
+      name: '予約管理',  // 新規追加
+      path: '/appointments',
+      icon: 'fas fa-calendar-alt'
+    },
+    {
+      name: '次回カルテ作成',
       path: '/next-record',
       icon: 'fas fa-calendar-plus'
     },
