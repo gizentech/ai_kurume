@@ -17,7 +17,7 @@ def get_appointments_by_date(date):
         try:
             datetime.strptime(date, '%Y-%m-%d')
         except ValueError:
-            return jsonify({"error": "日付形式が無効です (YYYY-MM-DD形式で入力してください)"}), 400
+            return jsonify({"error": "日付形式が無効です"}), 400
         
         # Warabeeデータベースから予約情報を取得
         wrb_conn = get_db_connection('wrb-sora')
@@ -31,10 +31,10 @@ def get_appointments_by_date(date):
         appointment_query = """
             SELECT 
                 ID, patientCd, 予約Kbn, 診療x予約日, 診療x予約時刻, 診療x終了時刻,
-                診療x予約項目, 予約枠, 予約枠x詳細項目, コメント, コメント詳細,
+                診療x予約項目, 予約枠, コメント, コメント詳細,
                 z初回登録者Cd, z初回登録日時, z登録者Cd, z登録日時,
                 診療x表示順
-            FROM wrb_data.診療予約
+            FROM view_wrb_table_予約.reki
             WHERE 診療x予約日 = ? AND delete = 0
             ORDER BY 診療x予約時刻 ASC, 診療x表示順 ASC
         """
@@ -96,7 +96,7 @@ def get_appointments_by_date(date):
         return jsonify({"error": str(e)}), 500
 
 def get_patient_info(patient_cd, cursor):
-    """患者情報を取得"""
+    """患者情報を取得（patientCd=ゲスト番号）"""
     if not patient_cd:
         return {"name": "不明", "gender": "不明", "birthDate": "不明"}
     
@@ -124,7 +124,7 @@ def get_patient_info(patient_cd, cursor):
     return {"name": "不明", "gender": "不明", "birthDate": "不明"}
 
 def get_user_info(user_cd, cursor):
-    """ユーザー情報を取得"""
+    """ユーザー情報を取得（Code=z初回登録者Cd, z登録者Cd）"""
     if not user_cd:
         return {"name": "不明", "code": ""}
     
@@ -132,7 +132,7 @@ def get_user_info(user_cd, cursor):
         user_query = """
             SELECT name
             FROM cresc_data.ユーザー
-            WHERE Code = ? AND isActive = 1 AND isDelete = 0
+            WHERE Code = ? AND isActive = 1
         """
         
         cursor.execute(user_query, (user_cd,))
@@ -157,7 +157,7 @@ def determine_appointment_display(appointment, cursor, date, time):
         # 同じ日時にKbn=1の予約があるかチェック
         check_query = """
             SELECT COUNT(*)
-            FROM wrb_data.診療予約
+            FROM view_wrb_table_予約.reki
             WHERE 診療x予約日 = ? AND 診療x予約時刻 = ? AND 予約Kbn = 1 AND delete = 0
         """
         
@@ -218,44 +218,3 @@ def format_birth_date(birth_date):
         pass
     
     return str(birth_date)
-
-@appointment_bp.route('/appointments/calendar-dates', methods=['GET'])
-def get_calendar_dates():
-    """カレンダー用の予約がある日付一覧を取得"""
-    try:
-        year = request.args.get('year', datetime.now().year)
-        month = request.args.get('month', datetime.now().month)
-        
-        wrb_conn = get_db_connection('wrb-sora')
-        cursor = wrb_conn.cursor()
-        
-        # 指定月の予約がある日付を取得
-        dates_query = """
-            SELECT DISTINCT 診療x予約日, COUNT(*) as count
-            FROM wrb_data.診療予約
-            WHERE YEAR(診療x予約日) = ? AND MONTH(診療x予約日) = ? AND delete = 0
-            GROUP BY 診療x予約日
-            ORDER BY 診療x予約日
-        """
-        
-        cursor.execute(dates_query, (year, month))
-        dates = []
-        
-        for row in cursor.fetchall():
-            dates.append({
-                'date': row[0].strftime('%Y-%m-%d') if row[0] else '',
-                'count': row[1]
-            })
-        
-        cursor.close()
-        wrb_conn.close()
-        
-        return jsonify({
-            "dates": dates,
-            "year": int(year),
-            "month": int(month)
-        })
-        
-    except Exception as e:
-        logger.error(f"カレンダー日付取得エラー: {e}")
-        return jsonify({"error": str(e)}), 500

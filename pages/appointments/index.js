@@ -263,13 +263,14 @@ function AppointmentItem({ appointment }) {
         </div>
       </div>
       
+      {/* コメント表示 */}
       {appointment.comment && (
         <div className="mt-2 text-sm text-gray-600 bg-yellow-50 p-2 rounded">
           <strong>コメント:</strong> {appointment.comment}
         </div>
       )}
 
-      {/* ツールチップ */}
+      {/* ホバー時のツールチップ */}
       {showTooltip && (appointment.initialUser || appointment.currentUser) && (
         <div className="absolute z-10 bg-gray-800 text-white text-xs rounded p-2 shadow-lg whitespace-nowrap"
              style={{ top: '-70px', left: '50%', transform: 'translateX(-50%)' }}>
