@@ -189,6 +189,7 @@ def extract_text_from_json(content):
     except Exception as e:
         logger.error(f"JSONテキスト抽出エラー: {e}")
         return content
+
 def get_department_name(dept_uid, cursor):
     """診療科名を取得"""
     if not dept_uid:
@@ -209,28 +210,30 @@ def get_department_name(dept_uid, cursor):
     
     return "不明"
 
+# python/server.py の修正部分
+
 def get_user_name(user_uid, cursor):
-    """ユーザー名を取得"""
+    """ユーザー名を取得（退職者も含む）"""
     if not user_uid:
         return "不明"
     
     try:
-        # まずnameフィールドを試す
+        # isDeleteがTRUEのユーザーも含めて検索
         cursor.execute("""
             SELECT name 
             FROM cresc_data.ユーザー 
-            WHERE uId = ? AND isActive = 1 AND isDelete = 0
+            WHERE uId = ? AND isActive = 1
         """, (user_uid,))
         
         result = cursor.fetchone()
         if result and result[0]:
             return result[0]
         
-        # nameがない場合はview_cresc_dataから漢字氏名を取得
+        # nameがない場合はview_cresc_dataから漢字氏名を取得（退職者も含む）
         cursor.execute("""
             SELECT 漢字氏名 
             FROM view_cresc_data.ユーザー 
-            WHERE uId = ? AND isActive = 1 AND isDelete = 0
+            WHERE uId = ? AND isActive = 1
         """, (user_uid,))
         
         result = cursor.fetchone()
@@ -241,189 +244,162 @@ def get_user_name(user_uid, cursor):
     
     return "不明"
 
-def get_record_type_name(type_uid, cursor):
-    """記載種別名を取得"""
-    if not type_uid:
-        return "不明"
-    
-    try:
-        cursor.execute("""
-            SELECT name 
-            FROM cresc_data.カルテ記載種別マスター 
-            WHERE uId = ? AND isActive = 1 AND isDelete = 0
-        """, (type_uid,))
-        
-        result = cursor.fetchone()
-        if result:
-            return result[0]
-    except Exception as e:
-        logger.debug(f"記載種別取得エラー: {e}")
-    
-    return "不明"
-
-def get_record_tags(record_uid, cursor):
-    """記載記録に関連するタグを取得"""
-    if not record_uid:
+def extract_text_from_json(content):
+    """JSON配列からテキストを抽出する - 改良版"""
+    if not content:
         return ""
     
     try:
-        tag_query = """
-            SELECT items 
-            FROM cresc_data.カルテ記載タグ 
-            WHERE uId = ? AND isActive = 1 AND isDelete = 0
-        """
+        # 文字列でない場合はそのまま返す
+        if not isinstance(content, str):
+            return str(content)
         
-        cursor.execute(tag_query, (record_uid,))
-        tag_rows = cursor.fetchall()
+        # JSONフォーマットでない場合はそのまま返す
+        if '"Text"' not in content:
+            return content
         
-        tag_names = []
-        for tag_row in tag_rows:
-            if tag_row[0]:
-                tag_uids = [uid.strip() for uid in str(tag_row[0]).split(',') if uid.strip()]
-                for tag_uid in tag_uids:
-                    tag_name = get_tag_name(tag_uid, cursor)
-                    if tag_name and tag_name != "不明":
-                        tag_names.append(tag_name)
+        logger.debug(f"JSON抽出開始: 長さ={len(content)}")
         
-        return ", ".join(tag_names)
+        # 一番外側の引用符を除去
+        cleaned_content = content.strip()
+        if cleaned_content.startswith('"') and cleaned_content.endswith('"'):
+            cleaned_content = cleaned_content[1:-1]
+        
+        # エスケープされた引用符を正しく処理
+        cleaned_content = cleaned_content.replace('""', '"')
+        
+        # まず、単一のJSON配列として解析を試行
+        try:
+            json_array = json.loads(cleaned_content)
+            if isinstance(json_array, list):
+                return process_json_array(json_array)
+        except json.JSONDecodeError:
+            pass
+        
+        # 複数のJSON配列が連結されている場合を処理
+        json_arrays = split_multiple_json_arrays(cleaned_content)
+        
+        # 各JSON配列からテキストを抽出
+        all_paragraphs = []
+        
+        for json_array_str in json_arrays:
+            try:
+                json_array = json.loads(json_array_str)
+                if isinstance(json_array, list):
+                    paragraph_text = process_json_array(json_array)
+                    if paragraph_text.strip():
+                        all_paragraphs.append(paragraph_text)
+                    elif any(item.get('Text') == '' for item in json_array if isinstance(item, dict)):
+                        # 空行のみの段落の場合、段落区切りとして扱う
+                        all_paragraphs.append('')
+            except json.JSONDecodeError as e:
+                logger.debug(f"JSON解析エラー: {e}")
+                # 正規表現でフォールバック
+                text_matches = re.findall(r'"Text"\s*:\s*"([^"]*)"', json_array_str)
+                if text_matches:
+                    paragraph_text = ''.join(text_matches)
+                    if paragraph_text.strip():
+                        all_paragraphs.append(paragraph_text)
+        
+        # 段落を改行で結合
+        result = '\n\n'.join(paragraph for paragraph in all_paragraphs if paragraph.strip())
+        
+        logger.debug(f"抽出完了: {len(result)}文字")
+        return result
+        
     except Exception as e:
-        logger.debug(f"記載タグ取得エラー: {e}")
-    
-    return ""
+        logger.error(f"JSONテキスト抽出エラー: {e}")
+        # エラーの場合も元のcontentを返す
+        return content
 
-def get_tag_name(tag_uid, cursor):
-    """記載タグ名を取得"""
-    if not tag_uid:
-        return "不明"
+def process_json_array(json_array):
+    """JSON配列内のTextフィールドを処理して文章として結合"""
+    result_parts = []
+    current_line = []
     
-    try:
-        cursor.execute("""
-            SELECT name 
-            FROM cresc_data.カルテ記載タグマスター 
-            WHERE uId = ? AND isActive = 1 AND isDelete = 0
-        """, (tag_uid,))
-        
-        result = cursor.fetchone()
-        if result:
-            return result[0]
-    except Exception as e:
-        logger.debug(f"記載タグマスター検索エラー: {e}")
-    
-    return "不明"
-
-def format_insurance_type(insurance_code):
-    """保険自費区分を文字列に変換"""
-    insurance_map = {
-        0: "保険",
-        1: "自費", 
-        2: "混合",
-        3: "その他"
-    }
-    return insurance_map.get(insurance_code, f"不明({insurance_code})")
-
-def format_inout_type(inout_code):
-    """入外区分を文字列に変換"""
-    inout_map = {
-        0: "外来",
-        1: "入院"
-    }
-    return inout_map.get(inout_code, f"不明({inout_code})")
-@app.route('/api/search-patients', methods=['GET'])
-def search_patients():
-    try:
-        query = request.args.get('query', '')
-        
-        if not query or len(query) < 2:
-            return jsonify({"error": "検索クエリは2文字以上必要です", "patients": []})
-        
-        logger.info(f"患者検索: クエリ = {query}")
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        sql_query = """
-            SELECT TOP 20
-                ゲスト番号, 漢字氏名, 生年月日, 性別, uId
-            FROM 
-                view_cresc_data.ゲスト基本情報
-            WHERE 
-                (ゲスト番号 LIKE ? OR 漢字氏名 LIKE ?)
-                AND isActive = 1 
-                AND isDelete = 0
-            ORDER BY 
-                ゲスト番号 DESC
-        """
-        
-        search_pattern = f"%{query}%"
-        cursor.execute(sql_query, (search_pattern, search_pattern))
-        
-        patients = []
-        columns = [column[0] for column in cursor.description]
-        
-        for row in cursor.fetchall():
-            patient = dict(zip(columns, row))
+    for item in json_array:
+        if isinstance(item, dict) and 'Text' in item:
+            text = item['Text']
             
-            patient_id = patient.get('ゲスト番号', '')
-            if isinstance(patient_id, (int, float)):
-                patient_id = f"{int(patient_id):08d}"
-            elif isinstance(patient_id, str):
-                patient_id = patient_id.zfill(8)
-                
-            birth_date = patient.get('生年月日', '')
-            if birth_date and len(str(birth_date)) == 8:
-                birth_date_str = str(birth_date)
-                birth_date = f"{birth_date_str[:4]}年{birth_date_str[4:6]}月{birth_date_str[6:8]}日"
-                
-            patients.append({
-                '患者ID': patient_id,
-                '患者名': patient.get('漢字氏名', '不明'),
-                '生年月日': birth_date,
-                '性別': patient.get('性別', '不明')
-            })
-        
-        cursor.close()
-        conn.close()
-        
-        logger.info(f"検索結果: {len(patients)}件の患者が見つかりました")
-        return jsonify({"patients": patients})
+            if text == '':
+                # 空のTextは改行として扱う
+                if current_line:
+                    result_parts.append(''.join(current_line))
+                    current_line = []
+                # 段落の区切りではなく、行の区切りとして扱う
+                result_parts.append('')
+            else:
+                # 非空のTextは現在の行に追加
+                current_line.append(text)
     
-    except Exception as e:
-        logger.error(f"患者検索エラー: {e}")
-        return jsonify({"error": str(e), "patients": []})
+    # 最後の行を追加
+    if current_line:
+        result_parts.append(''.join(current_line))
+    
+    # 空の要素を除去して結合
+    final_parts = [part for part in result_parts if part.strip()]
+    return '\n'.join(final_parts)
 
-@app.route('/api/health', methods=['GET'])
-def health_check():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
+def split_multiple_json_arrays(content):
+    """カンマで区切られた複数のJSON配列を分割"""
+    json_arrays = []
+    current_array = ""
+    bracket_count = 0
+    in_quotes = False
+    escaped = False
+    
+    i = 0
+    while i < len(content):
+        char = content[i]
         
-        cursor.execute("SELECT 1 as test")
-        result = cursor.fetchone()
+        if escaped:
+            escaped = False
+            current_array += char
+            i += 1
+            continue
         
-        cursor.execute("SELECT COUNT(*) FROM view_cresc_data.ゲスト基本情報 WHERE isActive = 1 AND isDelete = 0")
-        patient_count = cursor.fetchone()[0]
+        if char == '\\':
+            escaped = True
+            current_array += char
+            i += 1
+            continue
         
-        cursor.execute("SELECT COUNT(*) FROM cresc_data.カルテ記載 WHERE isActive = 1 AND isDelete = 0")
-        record_count = cursor.fetchone()[0]
+        if char == '"' and not escaped:
+            in_quotes = not in_quotes
+            current_array += char
+        elif not in_quotes:
+            if char == '[':
+                if bracket_count == 0:
+                    current_array = char
+                else:
+                    current_array += char
+                bracket_count += 1
+            elif char == ']':
+                current_array += char
+                bracket_count -= 1
+                if bracket_count == 0:
+                    json_arrays.append(current_array)
+                    current_array = ""
+                    # 次のJSON配列まで進む
+                    while i + 1 < len(content) and content[i + 1] in ['"', ',', ' ']:
+                        i += 1
+            elif bracket_count > 0:
+                current_array += char
+        else:
+            current_array += char
         
-        cursor.close()
-        conn.close()
-        
-        return jsonify({
-            "status": "ok", 
-            "message": "Python サーバーは正常に動作しています",
-            "db_connection": "成功",
-            "patient_count": patient_count,
-            "record_count": record_count,
-            "test_result": result[0] if result else None
-        })
-    except Exception as e:
-        logger.error(f"ヘルスチェックエラー: {e}")
-        return jsonify({
-            "status": "error", 
-            "message": f"データベース接続エラー: {str(e)}",
-            "db_connection": "失敗"
-        })
+        i += 1
+    
+    # 残ったものがあれば追加
+    if current_array.strip():
+        json_arrays.append(current_array.strip())
+    
+    # JSON配列が見つからなかった場合は全体を一つとして扱う
+    if not json_arrays:
+        json_arrays = [content]
+    
+    return json_arrays
+
 @app.route('/api/patient-records/<patient_id>', methods=['GET'])
 def get_patient_records(patient_id):
     try:
@@ -480,7 +456,7 @@ def get_patient_records(patient_id):
             'gender': patient.get('性別', '')
         }
         
-        # 診療記録の取得（正確なフィールド名を使用）
+        # 診療記録の取得
         records_query = """
             SELECT 
                 記載.uId,
@@ -510,7 +486,7 @@ def get_patient_records(patient_id):
         if not records_rows:
             cursor.close()
             conn.close()
-            logger.warning(f"診療記録が見つかりません: 患者ID = {patient_id}, UID = {patient_uid}")
+            logger.warning(f"診療記録が見つかりません: 患者ID = {patient_id}")
             return jsonify({
                 "error": "該当する診療記録が見つかりません",
                 "records": "",
@@ -544,9 +520,11 @@ def get_patient_records(patient_id):
             # 記載内容リストの取得
             content_list = record.get('記載内容リスト', '')
             if not content_list:
+                logger.debug(f"記載内容リストが空: record_uId = {record.get('uId')}")
                 continue
             
             content_ids = [cid.strip() for cid in str(content_list).split(',') if cid.strip()]
+            logger.debug(f"記載内容ID一覧: {content_ids}")
             
             # SOAPセクション用の辞書
             soap_content = {
@@ -556,13 +534,14 @@ def get_patient_records(patient_id):
                 'Plan': []
             }
             
-            # その他のセクション用の辞書
-            other_content = {}
+            # その他のセクション用のリスト
+            other_sections = []
             
             # 記載方法の判定用
             record_method = ""
             
             # 全ての記載内容を取得
+            content_found = False
             for content_id in content_ids:
                 try:
                     content_query = """
@@ -580,7 +559,10 @@ def get_patient_records(patient_id):
                     content_row = cursor.fetchone()
                     
                     if content_row:
+                        content_found = True
                         content_uid, section, content_text = content_row
+                        
+                        logger.debug(f"記載内容取得: ID={content_id}, セクション={section}")
                         
                         # JSONからテキストを抽出
                         formatted_content = extract_text_from_json(content_text)
@@ -598,42 +580,58 @@ def get_patient_records(patient_id):
                         
                         # SOAPセクションか他のセクションかを判別
                         if section in soap_content:
-                            soap_content[section].append(formatted_content)
+                            if formatted_content.strip():
+                                soap_content[section].append(formatted_content)
+                                logger.debug(f"SOAPセクションに追加: {section}, 長さ={len(formatted_content)}")
                         else:
-                            if section not in other_content:
-                                other_content[section] = []
-                            other_content[section].append(formatted_content)
+                            if formatted_content.strip():
+                                other_sections.append(f"{section}：{formatted_content}")
+                                logger.debug(f"その他セクションに追加: {section}, 長さ={len(formatted_content)}")
+                    else:
+                        logger.debug(f"記載内容が見つかりません: ID={content_id}")
                 
                 except Exception as e:
                     logger.error(f"記載内容ID {content_id} の取得中にエラー: {e}")
+            
+            if not content_found:
+                logger.warning(f"記録にコンテンツが見つかりません: record_uId = {record.get('uId')}")
+                continue
             
             # 記載方法が判定できない場合のデフォルト
             if not record_method:
                 if any(soap_content.values()):
                     record_method = "SOAP"
-                elif 記載種別 and ('自由' in 記載種別):
-                    record_method = "自由記載"
-                elif 記載種別 and ('超音波' in 記載種別):
-                    record_method = "超音波"
+                elif 記載種別:
+                    if '自由' in 記載種別:
+                        record_method = "自由記載"
+                    elif '超音波' in 記載種別:
+                        record_method = "超音波"
+                    else:
+                        record_method = 記載種別
                 else:
                     record_method = "記録"
             
-            # 空のセクションを削除し、テキストを結合
-            soap_content = {k: '\n\n'.join(v) for k, v in soap_content.items() if v}
-            other_content = {k: '\n\n'.join(v) for k, v in other_content.items() if v}
+            # SOAPセクションの統合
+            soap_formatted = {}
+            for section, content_list in soap_content.items():
+                if content_list:
+                    soap_formatted[section] = '\n\n'.join(content_list)
             
             # 何らかのコンテンツが存在する場合のみ記録を追加
-            if soap_content or other_content:
+            if soap_formatted or other_sections:
                 record_text = f"日付：{date_str}\n"
                 record_text += f"診療科：{診療科}\n"
                 record_text += f"担当医：{記載者 or 更新者}\n"
+                
                 if 記載者 and 記載者 != "不明":
                     record_text += f"記載者：{記載者}\n"
                 if 指示者 and 指示者 != "不明":
                     record_text += f"指示者：{指示者}\n"
-                if 更新者 and 更新者 != "不明":
+                if 更新者 and 更新者 != "不明" and 更新者 != 記載者:
                     record_text += f"更新者：{更新者}\n"
+                
                 record_text += f"記載方法：{record_method}\n"
+                
                 if 記載種別 and 記載種別 != "不明":
                     record_text += f"記載区分：{記載種別}\n"
                 
@@ -659,14 +657,15 @@ def get_patient_records(patient_id):
                 # SOAPセクションを定義順に追加
                 soap_order = ['Subject', 'Object', 'Assessment', 'Plan']
                 for section in soap_order:
-                    if section in soap_content:
-                        record_text += f"{section}：{soap_content[section]}\n"
+                    if section in soap_formatted:
+                        record_text += f"{section}：{soap_formatted[section]}\n"
                 
                 # その他のセクションを追加
-                for section, content in other_content.items():
-                    record_text += f"{section}：{content}\n"
+                for section_text in other_sections:
+                    record_text += f"{section_text}\n"
                 
                 formatted_records.append(record_text.rstrip())
+                logger.info(f"記録を追加しました: method={record_method}, soap_sections={list(soap_formatted.keys())}, other_sections={len(other_sections)}")
         
         cursor.close()
         conn.close()
@@ -690,305 +689,171 @@ def get_patient_records(patient_id):
             "records": "",
             "patientName": ""
         })
+        return jsonify(result)
+    
+    except Exception as e:
+        logger.error(f"診療記録取得エラー: {e}")
+        return jsonify({
+            "error": f"診療記録の取得に失敗しました: {str(e)}",
+            "records": "",
+            "patientName": ""
+        })
 
-
-def get_last_soap_record_date(patient_uid, cursor):
-    """最新のSOAPカルテの日付を取得"""
+# 他の関数は前回と同じ
+def get_record_tags(record_uid, cursor):
+    """記載記録に関連するタグを取得"""
+    if not record_uid:
+        return ""
+    
     try:
-        # 最新の記録を取得（簡易版）
-        soap_query = """
-            SELECT TOP 1 記載.updateStamp
-            FROM cresc_data.カルテ記載 as 記載
-            WHERE 
-                記載.患者uId = ?
-                AND 記載.isActive = 1 
-                AND 記載.isDelete = 0
-            ORDER BY 記載.updateStamp DESC
+        tag_query = """
+            SELECT items 
+            FROM cresc_data.カルテ記載タグ 
+            WHERE uId = ? AND isActive = 1 AND isDelete = 0
         """
         
-        cursor.execute(soap_query, (patient_uid,))
-        result = cursor.fetchone()
+        cursor.execute(tag_query, (record_uid,))
+        tag_rows = cursor.fetchall()
         
-        if result and result[0]:
-            date_str = str(int(result[0])) if isinstance(result[0], (int, float)) else str(result[0])
-            if len(date_str) >= 8:
-                return f"{date_str[:4]}年{date_str[4:6]}月{date_str[6:8]}日"
+        tag_names = []
+        for tag_row in tag_rows:
+            if tag_row[0]:
+                tag_uids = [uid.strip() for uid in str(tag_row[0]).split(',') if uid.strip()]
+                for tag_uid in tag_uids:
+                    tag_name = get_tag_name(tag_uid, cursor)
+                    if tag_name and tag_name != "不明":
+                        tag_names.append(tag_name)
         
-        return None
-        
+        return ", ".join(tag_names)
     except Exception as e:
-        logger.debug(f"最新SOAP記録日取得エラー: {e}")
-        return None
-        
-    except Exception as e:
-        logger.debug(f"最新SOAP記録日取得エラー: {e}")
-        return None
-@app.route('/api/next-record/guest-record/<guest_id>', methods=['GET'])
-def get_guest_record(guest_id):
+        logger.debug(f"記載タグ取得エラー: {e}")
+    
+    return ""
+
+def get_tag_name(tag_uid, cursor):
+    """記載タグ名を取得"""
+    if not tag_uid:
+        return "不明"
+    
     try:
-        logger.info(f"ゲスト記録取得: ゲストID = {guest_id}")
+        cursor.execute("""
+            SELECT name 
+            FROM cresc_data.カルテ記載タグマスター 
+            WHERE uId = ? AND isActive = 1 AND isDelete = 0
+        """, (tag_uid,))
         
-        if guest_id.isdigit():
-            guest_id = guest_id.zfill(8)
+        result = cursor.fetchone()
+        if result:
+            return result[0]
+    except Exception as e:
+        logger.debug(f"記載タグマスター検索エラー: {e}")
+    
+    return "不明"
+
+def get_department_name(dept_uid, cursor):
+    """診療科名を取得"""
+    if not dept_uid:
+        return "不明"
+    
+    try:
+        cursor.execute("""
+            SELECT name 
+            FROM cresc_data.診療科マスター 
+            WHERE uId = ? AND isActive = 1 AND isDelete = 0
+        """, (dept_uid,))
         
+        result = cursor.fetchone()
+        if result:
+            return result[0]
+    except Exception as e:
+        logger.debug(f"診療科マスター検索エラー: {e}")
+    
+    return "不明"
+
+def get_user_name(user_uid, cursor):
+    """ユーザー名を取得"""
+    if not user_uid:
+        return "不明"
+    
+    try:
+        cursor.execute("""
+            SELECT name 
+            FROM cresc_data.ユーザー 
+            WHERE uId = ? AND isActive = 1 AND isDelete = 0
+        """, (user_uid,))
+        
+        result = cursor.fetchone()
+        if result and result[0]:
+            return result[0]
+        
+        cursor.execute("""
+            SELECT 漢字氏名 
+            FROM view_cresc_data.ユーザー 
+            WHERE uId = ? AND isActive = 1 AND isDelete = 0
+        """, (user_uid,))
+        
+        result = cursor.fetchone()
+        if result and result[0]:
+            return result[0]
+    except Exception as e:
+        logger.debug(f"ユーザー名取得エラー: {e}")
+    
+    return "不明"
+
+def get_record_type_name(type_uid, cursor):
+    """記載種別名を取得"""
+    if not type_uid:
+        return "不明"
+    
+    try:
+        cursor.execute("""
+            SELECT name 
+            FROM cresc_data.カルテ記載種別マスター 
+            WHERE uId = ? AND isActive = 1 AND isDelete = 0
+        """, (type_uid,))
+        
+        result = cursor.fetchone()
+        if result:
+            return result[0]
+    except Exception as e:
+        logger.debug(f"記載種別取得エラー: {e}")
+    
+    return "不明"
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # ゲスト情報の取得
-        guest_query = """
-            SELECT 
-                uId, ゲスト番号, 漢字氏名, 生年月日, 性別
-            FROM 
-                view_cresc_data.ゲスト基本情報
-            WHERE 
-                ゲスト番号 = ?
-                AND isActive = 1
-                AND isDelete = 0
-        """
+        cursor.execute("SELECT 1 as test")
+        result = cursor.fetchone()
         
-        cursor.execute(guest_query, (guest_id,))
-        guest_row = cursor.fetchone()
+        cursor.execute("SELECT COUNT(*) FROM view_cresc_data.ゲスト基本情報 WHERE isActive = 1 AND isDelete = 0")
+        patient_count = cursor.fetchone()[0]
         
-        if not guest_row:
-            cursor.close()
-            conn.close()
-            return jsonify({"error": "ゲストが見つかりません"})
-        
-        guest_columns = [column[0] for column in cursor.description]
-        guest = dict(zip(guest_columns, guest_row))
-        patient_uid = guest.get('uId')
-        
-        # 生年月日の整形
-        birth_date = guest.get('生年月日', '')
-        if birth_date and len(str(birth_date)) == 8:
-            birth_date_str = str(birth_date)
-            birth_date = f"{birth_date_str[:4]}年{birth_date_str[4:6]}月{birth_date_str[6:8]}日"
-        
-        guest_info = {
-            'guestId': guest_id,
-            'guestName': guest.get('漢字氏名', ''),
-            'birthDate': birth_date,
-            'gender': guest.get('性別', '')
-        }
-        
-        # 最新のSOAPカルテを取得
-        last_record = get_latest_complete_soap_record(patient_uid, cursor)
+        cursor.execute("SELECT COUNT(*) FROM cresc_data.カルテ記載 WHERE isActive = 1 AND isDelete = 0")
+        record_count = cursor.fetchone()[0]
         
         cursor.close()
         conn.close()
         
         return jsonify({
-            "guestInfo": guest_info,
-            "lastRecord": last_record
+            "status": "ok", 
+            "message": "Python サーバーは正常に動作しています",
+            "db_connection": "成功",
+            "patient_count": patient_count,
+            "record_count": record_count,
+            "test_result": result[0] if result else None
         })
-        
     except Exception as e:
-        logger.error(f"ゲスト記録取得エラー: {e}")
-        return jsonify({"error": str(e)})
+        logger.error(f"ヘルスチェックエラー: {e}")
+        return jsonify({
+            "status": "error", 
+            "message": f"データベース接続エラー: {str(e)}",
+            "db_connection": "失敗"
+        })
 
-def get_latest_complete_soap_record(patient_uid, cursor):
-    """最新の完全なSOAPカルテを取得"""
-    try:
-        # 最新のSOAPカルテを検索
-        records_query = """
-            SELECT TOP 10
-                記載.uId,
-                記載.updateStamp,
-                記載.記載内容リスト
-            FROM 
-                cresc_data.カルテ記載 as 記載
-            WHERE
-                記載.患者uId = ?
-                AND 記載.isActive = 1
-                AND 記載.isDelete = 0
-            ORDER BY
-                記載.updateStamp DESC
-        """
-        
-        cursor.execute(records_query, (patient_uid,))
-        records_rows = cursor.fetchall()
-        
-        for record_row in records_rows:
-            record_uid, update_stamp, content_list = record_row
-            
-            if not content_list:
-                continue
-            
-            content_ids = [cid.strip() for cid in str(content_list).split(',') if cid.strip()]
-            
-            # SOAPセクションを収集
-            soap_content = {
-                'Subject': '',
-                'Object': '',  
-                'Assessment': '',
-                'Plan': ''
-            }
-            
-            # 各記載内容を取得
-            for content_id in content_ids:
-                try:
-                    content_query = """
-                        SELECT 
-                            記載区分, 記載内容
-                        FROM 
-                            cresc_data.カルテ記載内容
-                        WHERE 
-                            uId = ?
-                            AND isActive = 1
-                            AND isDelete = 0
-                    """
-                    
-                    cursor.execute(content_query, (content_id,))
-                    content_row = cursor.fetchone()
-                    
-                    if content_row:
-                        section, content_text = content_row
-                        section = str(section).strip() if section else ""
-                        
-                        if section in soap_content:
-                            soap_content[section] = extract_text_from_json(content_text)
-                
-                except Exception as e:
-                    logger.error(f"記載内容ID {content_id} の取得中にエラー: {e}")
-                    continue
-            
-            # 少なくとも一つのSOAPセクションが存在するかチェック
-            if any(soap_content[section].strip() for section in soap_content):
-                # 日付の整形
-                date_str = str(int(update_stamp)) if isinstance(update_stamp, (int, float)) else str(update_stamp)
-                
-                return {
-                    'date': date_str,
-                    'Subject': soap_content['Subject'],
-                    'Object': soap_content['Object'],
-                    'Assessment': soap_content['Assessment'],
-                    'Plan': soap_content['Plan']
-                }
-        
-        return None
-        
-    except Exception as e:
-        logger.error(f"最新SOAP記録取得エラー: {e}")
-        return None
-
-@app.route('/api/next-record/guest-list', methods=['POST'])
-def get_guest_list():
-    try:
-        data = request.get_json()
-        guest_ids = data.get('guestIds', [])
-        
-        if not guest_ids:
-            return jsonify({"error": "ゲストIDリストが必要です", "guests": []})
-        
-        logger.info(f"ゲストリスト取得: {len(guest_ids)}件のゲストID")
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        guests = []
-        
-        for guest_id in guest_ids:
-            try:
-                # ゲスト基本情報の取得
-                guest_query = """
-                    SELECT 
-                        uId, ゲスト番号, 漢字氏名, 生年月日, 性別
-                    FROM 
-                        view_cresc_data.ゲスト基本情報
-                    WHERE 
-                        ゲスト番号 = ?
-                        AND isActive = 1
-                        AND isDelete = 0
-                """
-                
-                cursor.execute(guest_query, (guest_id,))
-                guest_row = cursor.fetchone()
-                
-                if guest_row:
-                    guest_columns = [column[0] for column in cursor.description]
-                    guest = dict(zip(guest_columns, guest_row))
-                    
-                    # 生年月日の整形
-                    birth_date = guest.get('生年月日', '')
-                    if birth_date and len(str(birth_date)) == 8:
-                        birth_date_str = str(birth_date)
-                        birth_date = f"{birth_date_str[:4]}年{birth_date_str[4:6]}月{birth_date_str[6:8]}日"
-                    
-                    # SOAPカルテの存在確認
-                    soap_record = get_latest_complete_soap_record(guest.get('uId'), cursor)
-                    
-                    # SOAPカルテが存在する場合のみリストに追加
-                    if soap_record:
-                        guest_info = {
-                            'guestId': guest_id,
-                            'guestName': guest.get('漢字氏名', ''),
-                            'birthDate': birth_date,
-                            'gender': guest.get('性別', ''),
-                            'lastRecordDate': format_date_for_display(soap_record.get('date', ''))
-                        }
-                        guests.append(guest_info)
-                        logger.info(f"SOAPカルテ有り: ゲストID {guest_id}")
-                    else:
-                        logger.info(f"SOAPカルテなし: ゲストID {guest_id}")
-                else:
-                    logger.warning(f"ゲスト情報が見つかりません: ID {guest_id}")
-                    
-            except Exception as e:
-                logger.error(f"ゲストID {guest_id} の処理中にエラー: {e}")
-                continue
-        
-        cursor.close()
-        conn.close()
-        
-        logger.info(f"SOAPカルテ保有ゲスト: {len(guests)}件")
-        return jsonify({"guests": guests})
-        
-    except Exception as e:
-        logger.error(f"ゲストリスト取得エラー: {e}")
-        return jsonify({"error": str(e), "guests": []})
-
-def format_date_for_display(date_str):
-    """日付を表示用にフォーマット"""
-    if not date_str:
-        return "不明"
-    
-    try:
-        if len(str(date_str)) >= 8:
-            date_str = str(date_str)
-            return f"{date_str[:4]}年{date_str[4:6]}月{date_str[6:8]}日"
-    except:
-        pass
-    
-    return str(date_str)
-
-def text_to_json_array(text):
-    """テキストをJSONコンバーター形式の配列に変換"""
-    if not text:
-        return [{"Text": "", "Foreground": "#FF000000", "Size": "12"}]
-    
-    # 段落で分割（空行で区切られた部分）
-    paragraphs = text.split('\n\n')
-    json_array = []
-    
-    for i, paragraph in enumerate(paragraphs):
-        if i > 0:
-            # 段落間に空行を追加
-            json_array.append({"Text": "", "Foreground": "#FF000000", "Size": "12"})
-        
-        if paragraph.strip():
-            # 段落内の改行は保持
-            lines = paragraph.split('\n')
-            for j, line in enumerate(lines):
-                if j > 0:
-                    # 段落内の改行
-                    json_array.append({"Text": line.strip(), "Foreground": "#FF000000", "Size": "12"})
-                else:
-                    json_array.append({"Text": line.strip(), "Foreground": "#FF000000", "Size": "12"})
-        else:
-            # 空の段落
-            json_array.append({"Text": "", "Foreground": "#FF000000", "Size": "12"})
-    
-    return json_array
 if __name__ == '__main__':
     import sys
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000

@@ -70,7 +70,7 @@ def get_patient_records(patient_id):
     try:
         # 接続情報
         driver_name = "InterSystems IRIS ODBC35"
-        host = '172.21.2.3'
+        host = '172.16.2.3'
         port = '1972'
         cache_name = 'cresc-sora'
         username = 'soranomori'
