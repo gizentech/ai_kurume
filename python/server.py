@@ -15,30 +15,26 @@ def create_app():
     
     # 各機能のブループリントを登録
     try:
+        from modules.health import health_bp
+        from modules.appointment import appointment_bp
         from modules.patient_search import patient_search_bp
         from modules.patient_records import patient_records_bp
         from modules.next_record import next_record_bp
-        from modules.appointment import appointment_bp
-        from modules.health import health_bp
         
+        app.register_blueprint(health_bp, url_prefix='/api')
+        app.register_blueprint(appointment_bp, url_prefix='/api')
         app.register_blueprint(patient_search_bp, url_prefix='/api')
         app.register_blueprint(patient_records_bp, url_prefix='/api')
         app.register_blueprint(next_record_bp, url_prefix='/api')
-        app.register_blueprint(appointment_bp, url_prefix='/api')
-        app.register_blueprint(health_bp, url_prefix='/api')
         
         logger.info("全モジュールが正常に読み込まれました")
         
+        # 登録されたルートを表示
+        for rule in app.url_map.iter_rules():
+            logger.info(f"登録されたルート: {rule.rule} -> {rule.endpoint}")
+        
     except ImportError as e:
         logger.error(f"モジュールのインポートエラー: {e}")
-        logger.error("必要なモジュールファイルが見つかりません。以下のファイルが存在することを確認してください:")
-        logger.error("- modules/patient_search.py")
-        logger.error("- modules/patient_records.py") 
-        logger.error("- modules/next_record.py")
-        logger.error("- modules/appointment.py")
-        logger.error("- modules/health.py")
-        logger.error("- config/database.py")
-        
         # エラー時は基本的なエラーエンドポイントのみ作成
         create_error_endpoints(app, str(e))
     
@@ -63,21 +59,6 @@ def create_error_endpoints(app, error_message):
             "appointments": [],
             "date": date,
             "total": 0
-        }), 500
-    
-    @app.route('/api/search-patients', methods=['GET'])
-    def search_patients_error():
-        return jsonify({
-            "error": f"患者検索システムが利用できません: {error_message}",
-            "patients": []
-        }), 500
-    
-    @app.route('/api/patient-records/<patient_id>', methods=['GET'])
-    def get_patient_records_error(patient_id):
-        return jsonify({
-            "error": f"診療記録システムが利用できません: {error_message}",
-            "records": "",
-            "patientName": ""
         }), 500
 
 if __name__ == '__main__':

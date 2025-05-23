@@ -30,7 +30,7 @@ def health_check():
             wrb_cursor.execute("SELECT 1 as test")
             wrb_result = wrb_cursor.fetchone()
             
-            wrb_cursor.execute("SELECT COUNT(*) FROM view_wrb_table_予約.reki WHERE delete = 0")
+            wrb_cursor.execute("SELECT COUNT(*) FROM wrb_data.診療予約 WHERE delete = 0")
             appointment_count = wrb_cursor.fetchone()[0]
             
             wrb_cursor.close() 

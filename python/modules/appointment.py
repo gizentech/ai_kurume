@@ -7,7 +7,6 @@ from config.database import get_db_connection
 logger = logging.getLogger(__name__)
 appointment_bp = Blueprint('appointment', __name__)
 
-
 @appointment_bp.route('/appointments/<date>', methods=['GET'])
 def get_appointments_by_date(date):
     """指定日の予約一覧を取得"""
@@ -28,7 +27,7 @@ def get_appointments_by_date(date):
         cresc_conn = get_db_connection('cresc-sora')
         cresc_cursor = cresc_conn.cursor()
         
-        # テーブル名を実際のものに合わせて修正
+        # 予約データを取得
         appointment_query = """
             SELECT 
                 ID, patientCd, 予約Kbn, 診療x予約日, 診療x予約時刻, 診療x終了時刻,
@@ -158,7 +157,7 @@ def determine_appointment_display(appointment, cursor, date, time):
         # 同じ日時にKbn=1の予約があるかチェック
         check_query = """
             SELECT COUNT(*)
-            FROM view_wrb_table_予約.reki
+            FROM wrb_data.診療予約
             WHERE 診療x予約日 = ? AND 診療x予約時刻 = ? AND 予約Kbn = 1 AND delete = 0
         """
         
@@ -185,10 +184,8 @@ def format_time(time_obj):
     
     try:
         if isinstance(time_obj, str):
-            # "HH:MM:SS" 形式の場合
             return time_obj[:5]  # "HH:MM" のみ返す
         else:
-            # datetime.time オブジェクトの場合
             return time_obj.strftime("%H:%M")
     except:
         return str(time_obj)
