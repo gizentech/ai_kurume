@@ -7,6 +7,7 @@ from config.database import get_db_connection
 logger = logging.getLogger(__name__)
 appointment_bp = Blueprint('appointment', __name__)
 
+
 @appointment_bp.route('/appointments/<date>', methods=['GET'])
 def get_appointments_by_date(date):
     """指定日の予約一覧を取得"""
@@ -27,14 +28,14 @@ def get_appointments_by_date(date):
         cresc_conn = get_db_connection('cresc-sora')
         cresc_cursor = cresc_conn.cursor()
         
-        # 予約データを取得（Delete=0のもののみ）
+        # テーブル名を実際のものに合わせて修正
         appointment_query = """
             SELECT 
                 ID, patientCd, 予約Kbn, 診療x予約日, 診療x予約時刻, 診療x終了時刻,
                 診療x予約項目, 予約枠, コメント, コメント詳細,
                 z初回登録者Cd, z初回登録日時, z登録者Cd, z登録日時,
                 診療x表示順
-            FROM view_wrb_table_予約.reki
+            FROM wrb_data.診療予約
             WHERE 診療x予約日 = ? AND delete = 0
             ORDER BY 診療x予約時刻 ASC, 診療x表示順 ASC
         """

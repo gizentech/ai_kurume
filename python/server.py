@@ -31,55 +31,54 @@ def create_app():
         
     except ImportError as e:
         logger.error(f"モジュールのインポートエラー: {e}")
-        # フォールバック：基本的なエンドポイントのみ作成
-        create_fallback_endpoints(app)
+        logger.error("必要なモジュールファイルが見つかりません。以下のファイルが存在することを確認してください:")
+        logger.error("- modules/patient_search.py")
+        logger.error("- modules/patient_records.py") 
+        logger.error("- modules/next_record.py")
+        logger.error("- modules/appointment.py")
+        logger.error("- modules/health.py")
+        logger.error("- config/database.py")
+        
+        # エラー時は基本的なエラーエンドポイントのみ作成
+        create_error_endpoints(app, str(e))
     
     return app
 
-def create_fallback_endpoints(app):
-    """フォールバック用の基本エンドポイント"""
+def create_error_endpoints(app, error_message):
+    """エラー用のエンドポイント"""
     from flask import jsonify
     
     @app.route('/api/health', methods=['GET'])
-    def health_check():
+    def health_check_error():
         return jsonify({
-            "status": "ok", 
-            "message": "フォールバックモードで動作中",
-            "mode": "fallback"
-        })
+            "status": "error", 
+            "message": f"サーバー設定エラー: {error_message}",
+            "mode": "error"
+        }), 500
     
     @app.route('/api/appointments/<date>', methods=['GET'])
-    def get_appointments_fallback(date):
-        # デモデータを返す
-        demo_appointments = [
-            {
-                'id': 1,
-                'patientCd': '00000001',
-                'patientInfo': {
-                    "name": "テスト患者1",
-                    "gender": "女",
-                    "birthDate": "1990年01月01日"
-                },
-                'appointmentDate': date,
-                'appointmentTime': "09:00",
-                'endTime': "09:30",
-                'displayContent': "診：診察",
-                'comment': "デモデータ",
-                'commentDetail': "",
-                'initialUser': {"name": "システム", "code": "SYS"},
-                'currentUser': {"name": "システム", "code": "SYS"},
-                'initialRegDate': f"{date} 08:00",
-                'currentRegDate': f"{date} 08:00",
-                'displayOrder': 1
-            }
-        ]
-        
+    def get_appointments_error(date):
         return jsonify({
-            "appointments": demo_appointments,
+            "error": f"予約システムが利用できません: {error_message}",
+            "appointments": [],
             "date": date,
-            "total": len(demo_appointments),
-            "note": "フォールバックモードのデモデータです"
-        })
+            "total": 0
+        }), 500
+    
+    @app.route('/api/search-patients', methods=['GET'])
+    def search_patients_error():
+        return jsonify({
+            "error": f"患者検索システムが利用できません: {error_message}",
+            "patients": []
+        }), 500
+    
+    @app.route('/api/patient-records/<patient_id>', methods=['GET'])
+    def get_patient_records_error(patient_id):
+        return jsonify({
+            "error": f"診療記録システムが利用できません: {error_message}",
+            "records": "",
+            "patientName": ""
+        }), 500
 
 if __name__ == '__main__':
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
